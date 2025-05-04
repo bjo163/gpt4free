@@ -2,16 +2,18 @@ version: '3'
 
 services:
   gpt4free:
-    image: hlohaus789/g4f:latest
     shm_size: 2gb
     build:
       context: .
       dockerfile: docker/Dockerfile
     volumes:
-      - .:/app
+      - gpt4free_data:/app
     ports:
       - '8080:8080'
       - '1337:8080'
       - '7900:7900'
     environment:
       - OLLAMA_HOST=host.docker.internal
+
+volumes:
+  gpt4free_data:
