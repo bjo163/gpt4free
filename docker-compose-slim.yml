@@ -9,7 +9,10 @@ services:
       dockerfile: docker/Dockerfile-slim
     command: python -m g4f --debug --port 8080
     volumes:
-      - .:/app
+      - g4f_data:/app
     ports:
       - '1338:8080'
       - '1337:8080'
+
+volumes:
+  g4f_data:
