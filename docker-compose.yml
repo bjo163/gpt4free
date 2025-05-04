@@ -9,11 +9,11 @@ services:
     volumes:
       - gpt4free_data:/app
     ports:
-      - '8080:8080'
-      - '1337:8080'
-      - '7900:7900'
+      - '${PORT_1}'
+      - '${PORT_2}'
+      - '${PORT_3}'
     environment:
-      - OLLAMA_HOST=host.docker.internal
+      - OLLAMA_HOST=${OLLAMA_HOST}
 
 volumes:
   gpt4free_data:
