@@ -1,7 +1,7 @@
 version: '3'
 
 services:
-  gpt4free:
+  gpt4free_8080:
     shm_size: 2gb
     build:
       context: .
@@ -9,9 +9,31 @@ services:
     volumes:
       - gpt4free_data:/app
     ports:
-      - '${PORT_1}'
-      # - '${PORT_2}:1337'
-      # - '${PORT_3}:7900'
+      - '${PORT_1}:8080'
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST}
+
+  gpt4free_1337:
+    shm_size: 2gb
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - gpt4free_data:/app
+    ports:
+      - '${PORT_2}:8080'
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST}
+
+  gpt4free_7900:
+    shm_size: 2gb
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - gpt4free_data:/app
+    ports:
+      - '${PORT_3}:7900'
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
 
