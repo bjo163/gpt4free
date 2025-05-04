@@ -9,7 +9,7 @@ services:
     volumes:
       - gpt4free_data:/app
     ports:
-      - '${PORT_1}:8080'
+      - '${PORT_1}'
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
 
@@ -21,7 +21,7 @@ services:
     volumes:
       - gpt4free_data:/app
     ports:
-      - '${PORT_2}:8080'
+      - '${PORT_2}'
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
 
