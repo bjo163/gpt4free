@@ -9,7 +9,7 @@ services:
     volumes:
       - gpt4free_data:/app
     ports:
-      - '${PORT_1}:8080'
+      - '8080'
       - '${PORT_2}:1337'
       - '${PORT_3}:7900'
     environment:
