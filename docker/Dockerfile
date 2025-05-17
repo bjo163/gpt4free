@@ -32,11 +32,8 @@ COPY docker/supervisor-api.conf /etc/supervisor/conf.d/api.conf
 # Change background image
 COPY docker/background.png /usr/share/images/fluxbox/ubuntu-light.png
 
-# Add user, fix permissions
+# Add user, fix permissions for $HOME/.local
 RUN chown "${SEL_UID}:${SEL_GID}" $HOME/.local
-
-# Switch user
-
 
 # Set the working directory in the container.
 WORKDIR $G4F_DIR
@@ -47,9 +44,19 @@ COPY requirements.txt $G4F_DIR
 # Upgrade pip for the latest features and install the project's Python dependencies.
 RUN pip install --break-system-packages --upgrade pip \
   && pip install --break-system-packages -r requirements.txt
+
+# Create directories for volumes and ensure the runtime user ($SEL_UID) owns them.
+# This must be done as root before switching to USER $SEL_UID.
+# This ensures that when named volumes (like har_and_cookies, generated_media, and gpt4free_data for /app)
+# are initialized from the image content, they get the correct ownership.
+RUN mkdir -p $G4F_DIR/har_and_cookies $G4F_DIR/generated_media $G4F_DIR/g4f && \
+    chown -R "${SEL_UID}:${SEL_GID}" $G4F_DIR
+
 USER $SEL_UID
 
 # Copy the entire package into the container.
+# The --chown flag is still good practice, though $G4F_DIR and its subdirectories
+# (including $G4F_DIR/g4f if created by the chown command above) are now owned by $SEL_UID.
 ADD --chown=$SEL_UID:$SEL_GID g4f $G4F_DIR/g4f
 
 # Expose ports
