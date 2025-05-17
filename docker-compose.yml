@@ -8,6 +8,8 @@ services:
       dockerfile: docker/Dockerfile
     volumes:
       - gpt4free_data:/app
+      - har_and_cookies:/app/har_and_cookies
+      - generated_media:/app/generated_media
     ports:
       - '8080'
       - '1337:1337'
@@ -19,6 +21,8 @@ services:
 
 volumes:
   gpt4free_data:
+  har_and_cookies:
+  generated_media:
 
 networks:
   coolify:
