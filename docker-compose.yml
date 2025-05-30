@@ -2,16 +2,28 @@ version: '3'
 
 services:
   gpt4free:
-    image: hlohaus789/g4f:latest
     shm_size: 2gb
     build:
       context: .
       dockerfile: docker/Dockerfile
     volumes:
-      - .:/app
+      - gpt4free_data:/app
+      - har_and_cookies:/app/har_and_cookies
+      - generated_media:/app/generated_media
     ports:
-      - '8080:8080'
-      - '1337:8080'
-      - '7900:7900'
+      - '8080'
+      - '1337:1337'
+      - '7900'
     environment:
-      - OLLAMA_HOST=host.docker.internal
+      - OLLAMA_HOST=${OLLAMA_HOST}
+    networks:
+      - coolify
+
+volumes:
+  gpt4free_data:
+  har_and_cookies:
+  generated_media:
+
+networks:
+  coolify:
+    external: true  # ✅ ini penting, karena network-nya dibuat oleh Coolify
