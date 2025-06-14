@@ -1,18 +1,13 @@
-import codecs
 import os
 
 from setuptools import find_packages, setup
 
-STATIC_HOST = "gpt4free.github.io"
+current_dir = os.path.abspath(os.path.dirname(__file__))
 
-here = os.path.abspath(os.path.dirname(__file__))
-
-with codecs.open(os.path.join(here, 'README.md'), encoding='utf-8') as fh:
-    long_description = '\n' + fh.read()
+with open(os.path.join(current_dir, 'README.md'), "r") as f:
+    long_description = f.read()
 
 long_description = long_description.replace("[!NOTE]", "")
-long_description = long_description.replace("(docs/images/", f"(https://{STATIC_HOST}/docs/images/")
-long_description = long_description.replace("(docs/", f"(https://github.com/gpt4free/{STATIC_HOST}/blob/main/docs/")
 
 INSTALL_REQUIRE = [
     "requests",
@@ -38,12 +33,10 @@ EXTRA_REQUIRE = {
         "uvicorn",                 # api
         "nodriver",
         "python-multipart",
+        "a2wsgi",
         "pywebview",
         "plyer",
         "setuptools",
-        "odfpy", # files
-        "ebooklib",
-        "openpyxl",
         "markitdown[all]"
     ],
     'slim': [
@@ -58,7 +51,8 @@ EXTRA_REQUIRE = {
         "fastapi",                 # api
         "uvicorn",                 # api
         "python-multipart",
-        "markitdown[pdf, docx, pptx]"
+        "a2wsgi",
+        "markitdown[all]"
     ],
     "image": [
         "pillow",
@@ -91,9 +85,6 @@ EXTRA_REQUIRE = {
     ],
     "files": [
         "beautifulsoup4",
-        "odfpy",
-        "ebooklib",
-        "openpyxl",
         "markitdown[all]"
     ]
 }

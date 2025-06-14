@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import requests
 
-from ..helper import filter_none, format_image_prompt
+from ..helper import filter_none, format_media_prompt
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
 from ...typing import Union, AsyncResult, Messages, MediaListType
 from ...requests import StreamSession, raise_for_status
-from ...providers.response import FinishReason, ToolCalls, Usage, ImageResponse
+from ...providers.response import FinishReason, ToolCalls, Usage, ImageResponse, ProviderInfo
 from ...tools.media import render_messages
 from ...errors import MissingAuthError, ResponseError
 from ... import debug
@@ -66,7 +66,7 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
         headers: dict = None,
         impersonate: str = None,
         extra_parameters: list[str] = ["tools", "parallel_tool_calls", "tool_choice", "reasoning_effort", "logit_bias", "modalities", "audio"],
-        extra_body: dict = {},
+        extra_body: dict = None,
         **kwargs
     ) -> AsyncResult:
         if api_key is None and cls.api_key is not None:
@@ -85,7 +85,7 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
 
             # Proxy for image generation feature
             if model and model in cls.image_models:
-                prompt = format_image_prompt(messages, prompt)
+                prompt = format_media_prompt(messages, prompt)
                 data = {
                     "prompt": prompt,
                     "model": model,
@@ -93,11 +93,16 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                 async with session.post(f"{api_base.rstrip('/')}/images/generations", json=data, ssl=cls.ssl) as response:
                     data = await response.json()
                     cls.raise_error(data, response.status)
+                    model = data.get("model")
+                    if model:
+                        yield ProviderInfo(**cls.get_dict(), model=model)
                     await raise_for_status(response)
                     yield ImageResponse([image["url"] for image in data["data"]], prompt)
                 return
 
             extra_parameters = {key: kwargs[key] for key in extra_parameters if key in kwargs}
+            if extra_body is None:
+                extra_body = {}
             data = filter_none(
                 messages=list(render_messages(messages, media)),
                 model=model,
@@ -119,6 +124,9 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                     data = await response.json()
                     cls.raise_error(data, response.status)
                     await raise_for_status(response)
+                    model = data.get("model")
+                    if model:
+                        yield ProviderInfo(**cls.get_dict(), model=model)
                     choice = data["choices"][0]
                     if "content" in choice["message"] and choice["message"]["content"]:
                         yield choice["message"]["content"].strip()
@@ -132,8 +140,13 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                 elif content_type.startswith("text/event-stream"):
                     await raise_for_status(response)
                     first = True
+                    model_returned = False
                     async for data in response.sse():
                         cls.raise_error(data)
+                        model = data.get("model")
+                        if not model_returned and model:
+                            yield ProviderInfo(**cls.get_dict(), model=model)
+                            model_returned = True
                         choice = data["choices"][0]
                         if "content" in choice["delta"] and choice["delta"]["content"]:
                             delta = choice["delta"]["content"]

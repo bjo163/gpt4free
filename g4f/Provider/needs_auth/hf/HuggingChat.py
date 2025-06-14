@@ -15,18 +15,18 @@ try:
 except ImportError:
     has_curl_cffi = False
 
-from ..base_provider import ProviderModelMixin, AsyncAuthedProvider, AuthResult
-from ..helper import format_prompt, format_image_prompt, get_last_user_message
-from ...typing import AsyncResult, Messages, Cookies, MediaListType
-from ...errors import MissingRequirementsError, MissingAuthError, ResponseError
-from ...image import to_bytes
-from ...requests import get_args_from_nodriver, DEFAULT_HEADERS
-from ...requests.raise_for_status import raise_for_status
-from ...providers.response import JsonConversation, ImageResponse, Sources, TitleGeneration, Reasoning, RequestLogin, FinishReason
-from ...cookies import get_cookies
-from ...tools.media import merge_media
+from ...base_provider import ProviderModelMixin, AsyncAuthedProvider, AuthResult
+from ...helper import format_prompt, format_media_prompt, get_last_user_message
+from ....typing import AsyncResult, Messages, Cookies, MediaListType
+from ....errors import MissingRequirementsError, MissingAuthError, ResponseError
+from ....image import to_bytes
+from ....requests import get_args_from_nodriver, DEFAULT_HEADERS
+from ....requests.raise_for_status import raise_for_status
+from ....providers.response import JsonConversation, ImageResponse, Sources, TitleGeneration, Reasoning, RequestLogin, FinishReason
+from ....cookies import get_cookies
+from ....tools.media import merge_media
 from .models import default_model, default_vision_model, fallback_models, image_models, model_aliases
-from ... import debug
+from .... import debug
 
 class Conversation(JsonConversation):
     def __init__(self, models: dict):
@@ -51,14 +51,7 @@ class HuggingChat(AsyncAuthedProvider, ProviderModelMixin):
     def get_models(cls):
         if not cls.models:
             try:
-                text = requests.get(cls.url).text
-                text = re.search(r'models:(\[.+?\]),oldModels:', text).group(1)
-                text = re.sub(r',parameters:{[^}]+?}', '', text)
-                text = text.replace('void 0', 'null')
-                def add_quotation_mark(match):
-                    return f'{match.group(1)}"{match.group(2)}":'
-                text = re.sub(r'([{,])([A-Za-z0-9_]+?):', add_quotation_mark, text)
-                models = json.loads(text)
+                models = requests.get(f"{cls.url}/api/v2/models").json().get("json")
                 cls.text_models = [model["id"] for model in models] 
                 cls.models = cls.text_models + cls.image_models
                 cls.vision_models = [model["id"] for model in models if model["multimodal"]]
@@ -184,7 +177,7 @@ class HuggingChat(AsyncAuthedProvider, ProviderModelMixin):
                 break
             elif line["type"] == "file":
                 url = f"{cls.url}/conversation/{conversationId}/output/{line['sha']}"
-                yield ImageResponse(url, format_image_prompt(messages, prompt), options={"cookies": auth_result.cookies})
+                yield ImageResponse(url, format_media_prompt(messages, prompt), options={"cookies": auth_result.cookies})
             elif line["type"] == "webSearch" and "sources" in line:
                 sources = Sources(line["sources"])
             elif line["type"] == "title":

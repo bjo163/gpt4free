@@ -20,17 +20,17 @@ except ImportError:
 
 from ... import debug
 from ...typing import Messages, Cookies, MediaListType, AsyncResult, AsyncIterator
-from ...providers.response import JsonConversation, Reasoning, RequestLogin, ImageResponse, YouTube, AudioResponse
+from ...providers.response import JsonConversation, Reasoning, RequestLogin, ImageResponse, YouTube, AudioResponse, TitleGeneration
 from ...requests.raise_for_status import raise_for_status
 from ...requests.aiohttp import get_connector
 from ...requests import get_nodriver
 from ...image.copy_images import get_filename, get_media_dir, ensure_media_dir
-from ...errors import MissingAuthError
+from ...errors import MissingAuthError, ModelNotFoundError
 from ...image import to_bytes
 from ...cookies import get_cookies_dir
 from ...tools.media import merge_media
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin
-from ..helper import format_prompt, get_cookies, get_last_user_message, format_image_prompt
+from ..helper import format_prompt, get_cookies, get_last_user_message, format_media_prompt
 from ... import debug
 
 REQUEST_HEADERS = {
@@ -90,7 +90,8 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
     ]
     model_aliases = {
         "gemini-2.0": "",
-        "gemini-2.5-pro": "gemini-2.5-pro-exp"
+        "gemini-2.0-flash": ["gemini-2.0-flash", "gemini-2.0-flash", "gemini-2.0-flash-exp"],
+        "gemini-2.5-pro": "gemini-2.5-pro-exp",
     }
 
     synthesize_content_type = "audio/vnd.wav"
@@ -102,6 +103,29 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
     auto_refresh = True
     refresh_interval = 540
     rotate_tasks = {}
+
+    @classmethod
+    def get_model(cls, model: str) -> str:
+        """Get the internal model name from the user-provided model name."""
+        if not model:
+            return cls.default_model
+        
+        # Check if the model exists directly in our models list
+        if model in cls.models:
+            return model
+        
+        # Check if there's an alias for this model
+        if model in cls.model_aliases:
+            alias = cls.model_aliases[model]
+            # If the alias is a list, randomly select one of the options
+            if isinstance(alias, list):
+                selected_model = random.choice(alias)
+                debug.log(f"Gemini: Selected model '{selected_model}' from alias '{model}'")
+                return selected_model
+            debug.log(f"Gemini: Using model '{alias}' for alias '{model}'")
+            return alias
+        
+        raise ModelNotFoundError(f"Model {model} not found")
 
     @classmethod
     async def nodriver_login(cls, proxy: str = None) -> AsyncIterator[str]:
@@ -163,7 +187,7 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         if model in cls.model_aliases:
             model = cls.model_aliases[model]
         if audio is not None or model == "gemini-audio":
-            prompt = format_image_prompt(messages, prompt)
+            prompt = format_media_prompt(messages, prompt)
             filename = get_filename(["gemini"], prompt, ".ogx", prompt)
             ensure_media_dir()
             path = os.path.join(get_media_dir(), filename)
@@ -235,7 +259,7 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                     image_prompt = response_part = None
                     last_content = ""
                     youtube_ids = []
-                    async for line in response.content:
+                    for line in (await response.text()).split("\n"):
                         try:
                             try:
                                 line = json.loads(line)
@@ -246,6 +270,8 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                             if len(line[0]) < 3 or not line[0][2]:
                                 continue
                             response_part = json.loads(line[0][2])
+                            if response_part[10]:
+                                yield TitleGeneration(response_part[10][0].strip())
                             if not response_part[4]:
                                 continue
                             if return_conversation:
