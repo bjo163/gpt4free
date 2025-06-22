@@ -5,16 +5,17 @@ import time
 import asyncio
 import hashlib
 import base64
+from datetime import datetime
 from typing import AsyncIterator
-from urllib.parse import quote, unquote
-from aiohttp import ClientSession, ClientError
+from urllib.parse import quote
+from aiohttp import ClientSession, ClientError, ClientTimeout
 from urllib.parse import urlparse
 
-from ..typing import Optional, Cookies
+from ..typing import Optional, Cookies, Union
 from ..requests.aiohttp import get_connector
 from ..image import MEDIA_TYPE_MAP, EXTENSIONS_MAP
 from ..tools.files import secure_filename
-from ..providers.response import ImageResponse, AudioResponse, VideoResponse
+from ..providers.response import ImageResponse, AudioResponse, VideoResponse, quote_url
 from ..Provider.template import BackendApi
 from . import is_accepted_format, extract_data_uri
 from .. import debug
@@ -38,7 +39,7 @@ def get_media_extension(media: str) -> str:
     if not extension or len(extension) > 4:
         return ""
     if extension[1:] not in EXTENSIONS_MAP:
-        raise ValueError(f"Unsupported media extension: {extension} in: {media}")
+        raise ""
     return extension
 
 def ensure_media_dir():
@@ -49,10 +50,15 @@ def ensure_media_dir():
 def get_source_url(image: str, default: str = None) -> str:
     """Extract original URL from image parameter if present"""
     if "url=" in image:
-        decoded_url = unquote(image.split("url=", 1)[1])
+        decoded_url = quote_url(image.split("url=", 1)[1])
         if decoded_url.startswith(("http://", "https://")):
             return decoded_url
     return default
+
+def update_filename(response, filename: str) -> str:
+    date = response.headers.get("last-modified", response.headers.get("date"))
+    timestamp = datetime.strptime(date, '%a, %d %b %Y %H:%M:%S %Z').timestamp()
+    return str(int(timestamp)) + "_" + filename.split("_", maxsplit=1)[-1]
 
 async def save_response_media(response, prompt: str, tags: list[str]) -> AsyncIterator:
     """Save media from response to local file and return URL"""
@@ -64,6 +70,7 @@ async def save_response_media(response, prompt: str, tags: list[str]) -> AsyncIt
         raise ValueError(f"Unsupported media type: {content_type}")
 
     filename = get_filename(tags, prompt, f".{extension}", prompt)
+    filename = update_filename(response, filename)
     target_path = os.path.join(get_media_dir(), filename)
     ensure_media_dir()
     with open(target_path, 'wb') as f:
@@ -96,7 +103,7 @@ def get_filename(tags: list[str], alt: str, extension: str, image: str) -> str:
     tags = f"{'+'.join([str(tag) for tag in tags if tag])}+" if tags else ""
     return "".join((
         f"{int(time.time())}_",
-        f"{secure_filename(tags + alt)}_",
+        f"{secure_filename(tags + alt)}_" if alt else secure_filename(tags),
         hashlib.sha256(image.encode()).hexdigest()[:16],
         extension
     ))
@@ -108,9 +115,11 @@ async def copy_media(
     proxy: Optional[str] = None,
     alt: str = None,
     tags: list[str] = None,
-    add_url: bool = True,
+    add_url: Union[bool, str] = True,
     target: str = None,
-    ssl: bool = None
+    thumbnail: bool = False,
+    ssl: bool = None,
+    timeout: Optional[int] = None
 ) -> list[str]:
     """
     Download and store images locally with Unicode-safe filenames
@@ -119,11 +128,17 @@ async def copy_media(
     if add_url:
         add_url = not cookies
     ensure_media_dir()
+    media_dir = get_media_dir()
+    if thumbnail:
+        media_dir = os.path.join(media_dir, "thumbnails")
+        if not os.path.exists(media_dir):
+            os.makedirs(media_dir, exist_ok=True)
 
     async with ClientSession(
         connector=get_connector(proxy=proxy),
         cookies=cookies,
         headers=headers,
+        timeout=ClientTimeout(total=timeout) if timeout else None,
     ) as session:
         async def copy_image(image: str, target: str = None) -> str:
             """Process individual image and return its local URL"""
@@ -135,14 +150,18 @@ async def copy_media(
             if target_path is None:
                 # Build safe filename with full Unicode support
                 media_extension = get_media_extension(image)
-                filename = get_filename(tags, alt, media_extension, image)
-                target_path = os.path.join(get_media_dir(), filename)
+                path = urlparse(image).path
+                if path.startswith("/media/"):
+                    filename = secure_filename(path[len("/media/"):])
+                else:
+                    filename = get_filename(tags, alt, media_extension, image)
+                target_path = os.path.join(media_dir, filename)
             try:
                 # Handle different image types
                 if image.startswith("data:"):
                     with open(target_path, "wb") as f:
                         f.write(extract_data_uri(image))
-                else:
+                elif not os.path.exists(target_path) or os.lstat(target_path).st_size <= 0:
                     # Apply BackendApi settings if needed
                     if BackendApi.working and image.startswith(BackendApi.url):
                         request_headers = BackendApi.headers if headers is None else headers
@@ -153,6 +172,9 @@ async def copy_media(
                     # Use aiohttp to fetch the image
                     async with session.get(image, ssl=request_ssl, headers=request_headers) as response:
                         response.raise_for_status()
+                        if target is None:
+                            filename = update_filename(response, filename)
+                            target_path = os.path.join(media_dir, filename)
                         media_type = response.headers.get("content-type", "application/octet-stream")
                         if media_type not in ("application/octet-stream", "binary/octet-stream"):
                             if media_type not in MEDIA_TYPE_MAP:
@@ -169,21 +191,21 @@ async def copy_media(
                         file_header = f.read(12)
                     try:
                         detected_type = is_accepted_format(file_header)
-                        if detected_type:
-                            media_extension = f".{detected_type.split('/')[-1]}"
-                            media_extension = media_extension.replace("jpeg", "jpg")
-                            os.rename(target_path, f"{target_path}{media_extension}")
-                            target_path = f"{target_path}{media_extension}"
+                        media_extension = f".{detected_type.split('/')[-1]}"
+                        media_extension = media_extension.replace("jpeg", "jpg")
+                        os.rename(target_path, f"{target_path}{media_extension}")
+                        target_path = f"{target_path}{media_extension}"
                     except ValueError:
                         pass
-                # Build URL with safe encoding
-                url_filename = quote(os.path.basename(target_path))
-                return f"/media/{url_filename}" + (('?url=' + quote(image)) if add_url and not image.startswith('data:') else '')
+                if thumbnail:
+                    return "/thumbnail/" + os.path.basename(target_path)
+                # Build URL relative to media directory
+                return f"/media/{os.path.basename(target_path)}" + ('?' + (add_url if isinstance(add_url, str) else '' + 'url=' + quote(image)) if add_url and not image.startswith('data:') else '')
 
             except (ClientError, IOError, OSError, ValueError) as e:
-                debug.error(f"Image copying failed: {type(e).__name__}: {e}")
+                debug.error(f"Image copying failed:", e)
                 if target_path and os.path.exists(target_path):
                     os.unlink(target_path)
-                return get_source_url(image, image)
+                return image
 
-        return await asyncio.gather(*[copy_image(img, target) for img in images])
+        return await asyncio.gather(*[copy_image(image, target) for image in images])

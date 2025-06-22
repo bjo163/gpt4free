@@ -33,7 +33,7 @@ SAFE_PARAMETERS = [
     "api_key", "api_base", "seed", "width", "height",
     "max_retries", "web_search",
     "guidance_scale", "num_inference_steps", "randomize_seed",
-    "safe", "enhance", "private", "aspect_ratio", "n",
+    "safe", "enhance", "private", "aspect_ratio", "n", "transparent"
 ]
 
 BASIC_PARAMETERS = {
@@ -293,6 +293,7 @@ class AsyncGeneratorProvider(AbstractProvider):
         model: str,
         messages: Messages,
         stream: bool = True,
+        timeout: int = None,
         **kwargs
     ) -> CreateResult:
         """
@@ -311,7 +312,8 @@ class AsyncGeneratorProvider(AbstractProvider):
         """
         return to_sync_generator(
             cls.create_async_generator(model, messages, stream=stream, **kwargs),
-            stream=stream
+            stream=stream,
+            timeout=timeout
         )
 
     @staticmethod

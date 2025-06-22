@@ -78,7 +78,8 @@ class LMArenaBeta(AsyncGeneratorProvider, ProviderModelMixin, AuthFileMixin):
     label = "LMArena Beta"
     url = "https://beta.lmarena.ai"
     api_endpoint = "https://beta.lmarena.ai/api/stream/create-evaluation"
-    working = has_nodriver
+    working = True
+    active_by_default = has_nodriver
 
     default_model = list(text_models.keys())[0]
     models = list(text_models) + list(image_models)
@@ -102,11 +103,11 @@ class LMArenaBeta(AsyncGeneratorProvider, ProviderModelMixin, AuthFileMixin):
                 async def callback(page):
                     while not await page.evaluate('document.cookie.indexOf("arena-auth-prod-v1") >= 0'):
                         await asyncio.sleep(1)
-                    while await page.evaluate('document.querySelector(\'[name="cf-turnstile-response"]\').length > 0') :
+                    while not await page.evaluate('document.querySelector(\'textarea[name="text"]\')'):
                         await asyncio.sleep(1)
                 args = await get_args_from_nodriver(cls.url, proxy=proxy, callback=callback)
             except (RuntimeError, FileNotFoundError) as e:
-                debug.log(f"Nodriver is not available: {type(e).__name__}: {e}")
+                debug.log(f"Nodriver is not available:", e)
                 args = {"headers": DEFAULT_HEADERS, "cookies": {}, "impersonate": "chrome"}
         else:
             args = {"headers": DEFAULT_HEADERS, "cookies": {}, "impersonate": "chrome"}
@@ -170,7 +171,10 @@ class LMArenaBeta(AsyncGeneratorProvider, ProviderModelMixin, AuthFileMixin):
                     if line.startswith("af:"):
                         yield JsonConversation(message_ids=[modelAMessageId])
                     elif line.startswith("a0:"):
-                        yield json.loads(line[3:])
+                        chunk = json.loads(line[3:])
+                        if chunk == "hasArenaError":
+                            raise ModelNotFoundError("LMArena Beta encountered an error: hasArenaError")
+                        yield chunk
                     elif line.startswith("a2:"):
                         yield ImageResponse([image.get("image") for image in json.loads(line[3:])], prompt)
                     elif line.startswith("ad:"):

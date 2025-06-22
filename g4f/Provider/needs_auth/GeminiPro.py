@@ -13,7 +13,7 @@ from ...errors import MissingAuthError, ModelNotFoundError
 from ...requests.raise_for_status import raise_for_status
 from ...providers.response import Usage, FinishReason
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin
-from ..helper import get_connector
+from ..helper import get_connector, to_string
 from ... import debug
 
 class GeminiPro(AsyncGeneratorProvider, ProviderModelMixin):
@@ -27,9 +27,19 @@ class GeminiPro(AsyncGeneratorProvider, ProviderModelMixin):
     supports_system_message = True
     needs_auth = True
 
-    default_model = "gemini-1.5-pro"
+    default_model = "gemini-2.0-flash "
     default_vision_model = default_model
-    fallback_models = [default_model, "gemini-2.0-flash-exp", "gemini-pro", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+    fallback_models = [
+        default_model,
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash-thinking-exp",
+        "gemini-2.5-flash-preview-04-17",
+        "gemma-3-1b-it",
+        "gemma-3-12b-it",
+        "gemma-3-27b-it",
+        "gemma-3-4b-it",
+        "gemma-3n-e4b-it"
+    ]
     model_aliases = {
         "gemini-1.5-pro": [default_model, "gemini-pro"],
         "gemini-1.5-flash": ["gemini-1.5-flash", "gemini-1.5-flash-8b"],
@@ -58,31 +68,6 @@ class GeminiPro(AsyncGeneratorProvider, ProviderModelMixin):
         return cls.models
 
     @classmethod
-    def get_model(cls, model: str, **kwargs) -> str:
-        """Get the internal model name from the user-provided model name."""
-        # kwargs can contain api_key, api_base, etc. but we don't need them for model selection
-        if not model:
-            return cls.default_model
-        
-        # Check if the model exists directly in our models list
-        if model in cls.models:
-            return model
-        
-        # Check if there's an alias for this model
-        if model in cls.model_aliases:
-            alias = cls.model_aliases[model]
-            # If the alias is a list, randomly select one of the options
-            if isinstance(alias, list):
-                import random
-                selected_model = random.choice(alias)
-                debug.log(f"GeminiPro: Selected model '{selected_model}' from alias '{model}'")
-                return selected_model
-            debug.log(f"GeminiPro: Using model '{alias}' for alias '{model}'")
-            return alias
-        
-        raise ModelNotFoundError(f"Model {model} not found")
-
-    @classmethod
     async def create_async_generator(
         cls,
         model: str,
@@ -100,7 +85,10 @@ class GeminiPro(AsyncGeneratorProvider, ProviderModelMixin):
         if not api_key:
             raise MissingAuthError('Add a "api_key"')
 
-        model = cls.get_model(model, api_key=api_key, api_base=api_base)
+        try:
+            model = cls.get_model(model, api_key=api_key, api_base=api_base)
+        except ModelNotFoundError:
+            pass
 
         headers = params = None
         if use_auth_header:
@@ -114,7 +102,7 @@ class GeminiPro(AsyncGeneratorProvider, ProviderModelMixin):
             contents = [
                 {
                     "role": "model" if message["role"] == "assistant" else "user",
-                    "parts": [{"text": message["content"]}]
+                    "parts": [{"text": to_string(message["content"])}]
                 }
                 for message in messages
                 if message["role"] != "system"
@@ -172,7 +160,9 @@ class GeminiPro(AsyncGeneratorProvider, ProviderModelMixin):
                             try:
                                 data = b"".join(lines)
                                 data = json.loads(data)
-                                yield data["candidates"][0]["content"]["parts"][0]["text"]
+                                content = data["candidates"][0]["content"]
+                                if "parts" in content:
+                                    yield content["parts"][0]["text"]
                                 if "finishReason" in data["candidates"][0]:
                                     yield FinishReason(data["candidates"][0]["finishReason"].lower())
                                 usage = data.get("usageMetadata")
@@ -182,9 +172,9 @@ class GeminiPro(AsyncGeneratorProvider, ProviderModelMixin):
                                         completion_tokens=usage.get("candidatesTokenCount"),
                                         total_tokens=usage.get("totalTokenCount")
                                     )
-                            except:
+                            except Exception as e:
                                 data = data.decode(errors="ignore") if isinstance(data, bytes) else data
-                                raise RuntimeError(f"Read chunk failed: {data}")
+                                raise RuntimeError(f"Read chunk failed: {data}") from e
                             lines = []
                         else:
                             lines.append(chunk)

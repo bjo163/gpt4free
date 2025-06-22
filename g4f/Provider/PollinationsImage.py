@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .helper import format_media_prompt
-from ..typing import AsyncResult, Messages
+from ..typing import AsyncResult, Messages, MediaListType
 from ..constants import STATIC_URL
 from .PollinationsAI import PollinationsAI
 
@@ -34,11 +34,12 @@ class PollinationsImage(PollinationsAI):
         cls,
         model: str,
         messages: Messages,
+        media: MediaListType = None,
         proxy: str = None,
         referrer: str = STATIC_URL,
         api_key: str = None,
         prompt: str = None,
-        aspect_ratio: str = "1:1",
+        aspect_ratio: str = None,
         width: int = None,
         height: int = None,
         seed: Optional[int] = None,
@@ -47,6 +48,7 @@ class PollinationsImage(PollinationsAI):
         private: bool = False,
         enhance: bool = False,
         safe: bool = False,
+        transparent: bool = False,
         n: int = 1,
         **kwargs
     ) -> AsyncResult:
@@ -55,6 +57,7 @@ class PollinationsImage(PollinationsAI):
         async for chunk in cls._generate_image(
             model=model,
             prompt=format_media_prompt(messages, prompt),
+            media=media,
             proxy=proxy,
             aspect_ratio=aspect_ratio,
             width=width,
@@ -65,6 +68,7 @@ class PollinationsImage(PollinationsAI):
             private=private,
             enhance=enhance,
             safe=safe,
+            transparent=transparent,
             n=n,
             referrer=referrer,
             api_key=api_key

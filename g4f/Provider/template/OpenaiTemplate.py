@@ -6,6 +6,7 @@ from ..helper import filter_none, format_media_prompt
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
 from ...typing import Union, AsyncResult, Messages, MediaListType
 from ...requests import StreamSession, raise_for_status
+from ...image import use_aspect_ratio
 from ...providers.response import FinishReason, ToolCalls, Usage, ImageResponse, ProviderInfo
 from ...tools.media import render_messages
 from ...errors import MissingAuthError, ResponseError
@@ -89,6 +90,7 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                 data = {
                     "prompt": prompt,
                     "model": model,
+                    **use_aspect_ratio({"width": kwargs.get("width"), "height": kwargs.get("height")}, kwargs.get("aspect_ratio", None))
                 }
                 async with session.post(f"{api_base.rstrip('/')}/images/generations", json=data, ssl=cls.ssl) as response:
                     data = await response.json()
@@ -127,16 +129,17 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                     model = data.get("model")
                     if model:
                         yield ProviderInfo(**cls.get_dict(), model=model)
-                    choice = data["choices"][0]
-                    if "content" in choice["message"] and choice["message"]["content"]:
-                        yield choice["message"]["content"].strip()
-                    if "tool_calls" in choice["message"]:
-                        yield ToolCalls(choice["message"]["tool_calls"])
                     if "usage" in data:
                         yield Usage(**data["usage"])
-                    if "finish_reason" in choice and choice["finish_reason"] is not None:
-                        yield FinishReason(choice["finish_reason"])
-                        return
+                    if "choices" in data:
+                        choice = data["choices"][0]
+                        if "content" in choice["message"] and choice["message"]["content"]:
+                            yield choice["message"]["content"].strip()
+                        if "tool_calls" in choice["message"]:
+                            yield ToolCalls(choice["message"]["tool_calls"])
+                        if "finish_reason" in choice and choice["finish_reason"] is not None:
+                            yield FinishReason(choice["finish_reason"])
+                            return
                 elif content_type.startswith("text/event-stream"):
                     await raise_for_status(response)
                     first = True

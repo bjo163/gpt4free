@@ -9,6 +9,7 @@ from inspect import signature
 
 from ...errors import VersionNotFoundError, MissingAuthError
 from ...image.copy_images import copy_media, ensure_media_dir, get_media_dir
+from ...image import get_width_height
 from ...tools.run_tools import iter_run_tools
 from ... import Provider
 from ...providers.base_provider import ProviderModelMixin
@@ -93,6 +94,7 @@ class Api:
             "vision": getattr(provider, "default_vision_model", None) is not None,
             "nodriver": getattr(provider, "use_nodriver", False),
             "hf_space": getattr(provider, "hf_space", False),
+            "active_by_default": not provider.needs_auth if provider.active_by_default is None else provider.active_by_default,
             "auth": provider.needs_auth,
             "login_url": getattr(provider, "login_url", None),
         } for provider in Provider.__providers__ if provider.working and safe_get_models(provider)]
@@ -151,7 +153,8 @@ class Api:
             debug.logs.append(" ".join([str(value) for value in values]))
             if debug.logging:
                 debug.log_handler(*values, file=file)
-        debug.log = decorated_log
+        if "user" not in kwargs:
+            debug.log = decorated_log
         proxy = os.environ.get("G4F_PROXY")
         provider = kwargs.get("provider")
         try:
@@ -159,9 +162,12 @@ class Api:
                 kwargs.get("model"), provider,
                 stream=True,
                 ignore_stream=True,
-                logging=False,
                 has_images="media" in kwargs,
             )
+            if "user" in kwargs:
+                debug.error("User:", kwargs.get("user", "Unknown"))
+                debug.error("Referrer:", kwargs.get("referer", ""))
+                debug.error("User-Agent:", kwargs.get("user-agent", ""))
         except Exception as e:
             logger.exception(e)
             yield self._format_json('error', type(e).__name__, message=get_error_message(e))
@@ -195,8 +201,18 @@ class Api:
                     media = chunk
                     if download_media or chunk.get("cookies"):
                         chunk.alt = format_media_prompt(kwargs.get("messages"), chunk.alt)
-                        tags = [model, kwargs.get("aspect_ratio"), kwargs.get("resolution"), kwargs.get("width"), kwargs.get("height")]
-                        media = asyncio.run(copy_media(chunk.get_list(), chunk.get("cookies"), chunk.get("headers"), proxy=proxy, alt=chunk.alt, tags=tags))
+                        width, height = get_width_height(chunk.get("width"), chunk.get("height"))
+                        tags = [model, kwargs.get("aspect_ratio"), kwargs.get("resolution")]
+                        media = asyncio.run(copy_media(
+                            chunk.get_list(),
+                            chunk.get("cookies"),
+                            chunk.get("headers"),
+                            proxy=proxy,
+                            alt=chunk.alt,
+                            tags=tags,
+                            add_url=f"width={width}&height={height}&",
+                            timeout=kwargs.get("timeout"),
+                        ))
                         media = ImageResponse(media, chunk.alt) if isinstance(chunk, ImageResponse) else VideoResponse(media, chunk.alt)
                     yield self._format_json("content", str(media), urls=media.urls, alt=media.alt)
                 elif isinstance(chunk, SynthesizeData):
@@ -221,13 +237,21 @@ class Api:
                     yield self._format_json("suggestions", chunk.suggestions)
                 elif isinstance(chunk, DebugResponse):
                     yield self._format_json("log", chunk.log)
+                elif isinstance(chunk, ContinueResponse):
+                    yield self._format_json("continue", chunk.log)
                 elif isinstance(chunk, RawResponse):
                     yield self._format_json(chunk.type, **chunk.get_dict())
                 else:
                     yield self._format_json("content", str(chunk))
         except MissingAuthError as e:
             yield self._format_json('auth', type(e).__name__, message=get_error_message(e))
+        except (TimeoutError, asyncio.exceptions.CancelledError) as e:
+            if "user" in kwargs:
+                debug.error(e, "User:", kwargs.get("user", "Unknown"))
+            yield self._format_json('error', type(e).__name__, message=get_error_message(e))
         except Exception as e:
+            if "user" in kwargs:
+                debug.error(e, "User:", kwargs.get("user", "Unknown"))
             logger.exception(e)
             yield self._format_json('error', type(e).__name__, message=get_error_message(e))
         finally:

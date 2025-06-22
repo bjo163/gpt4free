@@ -50,7 +50,6 @@ class IterListProvider(BaseRetryProvider):
         """
         exceptions = {}
         started: bool = False
-
         for provider in self.get_providers(stream and not ignore_stream, ignored):
             self.last_provider = provider
             alias = model
@@ -58,6 +57,8 @@ class IterListProvider(BaseRetryProvider):
                 alias = getattr(provider, "default_model", None)
             if hasattr(provider, "model_aliases"):
                 alias = provider.model_aliases.get(model, model)
+            if isinstance(alias, list):
+                alias = random.choice(alias)
             debug.log(f"Using provider: {provider.__name__} with model: {alias}")
             yield ProviderInfo(**provider.get_dict(), model=alias)
             extra_body = kwargs.copy()
@@ -65,6 +66,7 @@ class IterListProvider(BaseRetryProvider):
                 api_key = api_key.get(provider.get_parent())
             if api_key:
                 extra_body["api_key"] = api_key
+                debug.log(f"Using API key for provider: {provider.__name__}")
             try:
                 response = provider.create_function(alias, messages, stream=stream, **extra_body)
                 for chunk in response:
@@ -104,12 +106,15 @@ class IterListProvider(BaseRetryProvider):
                 alias = getattr(provider, "default_model", None)
             if hasattr(provider, "model_aliases"):
                 alias = provider.model_aliases.get(model, model)
+            if isinstance(alias, list):
+                alias = random.choice(alias)
             debug.log(f"Using {provider.__name__} provider with model {alias}")
             yield ProviderInfo(**provider.get_dict(), model=alias)
             extra_body = kwargs.copy()
             if isinstance(api_key, dict):
                 api_key = api_key.get(provider.get_parent())
             if api_key:
+                debug.log(f"Using API key for provider: {provider.__name__}")
                 extra_body["api_key"] = api_key
             if conversation is not None and hasattr(conversation, provider.__name__):
                 extra_body["conversation"] = JsonConversation(**getattr(conversation, provider.__name__))

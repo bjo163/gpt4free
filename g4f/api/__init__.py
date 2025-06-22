@@ -5,11 +5,13 @@ import json
 import uvicorn
 import secrets
 import os
+import re
 import shutil
 from email.utils import formatdate
 import os.path
 import hashlib
 import asyncio
+from contextlib import asynccontextmanager
 from urllib.parse import quote_plus
 from fastapi import FastAPI, Response, Request, UploadFile, Form, Depends
 from fastapi.responses import StreamingResponse, RedirectResponse, HTMLResponse, JSONResponse, FileResponse
@@ -35,6 +37,11 @@ try:
     has_a2wsgi = True
 except ImportError:
     has_a2wsgi = False
+try:
+    from PIL import Image 
+    has_pillow = True
+except ImportError:
+    has_pillow = False
 from types import SimpleNamespace
 from typing import Union, Optional, List
 
@@ -43,13 +50,18 @@ try:
 except ImportError:
     class Annotated:
         pass
+try:
+    from nodriver import util
+    has_nodriver = True
+except ImportError:
+    has_nodriver = False
 
 import g4f
 import g4f.debug
 from g4f.client import AsyncClient, ChatCompletion, ImagesResponse, ClientResponse
 from g4f.providers.response import BaseConversation, JsonConversation
 from g4f.client.helper import filter_none
-from g4f.image import is_data_an_media, EXTENSIONS_MAP
+from g4f.image import EXTENSIONS_MAP, is_data_an_media, process_image
 from g4f.image.copy_images import get_media_dir, copy_media, get_source_url
 from g4f.errors import ProviderNotFoundError, ModelNotFoundError, MissingAuthError, NoValidHarFileError, MissingRequirementsError
 from g4f.cookies import read_cookie_files, get_cookies_dir
@@ -71,9 +83,27 @@ from g4f import debug
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 1337
+DEFAULT_TIMEOUT = 600
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Read cookie files if not ignored
+    if not AppConfig.ignore_cookie_files:
+        read_cookie_files()
+    yield
+    if has_nodriver:
+        for browser in util.get_registered_instances():
+            if browser.connection:
+                browser.stop()
+        lock_file = os.path.join(get_cookies_dir(), ".nodriver_is_open")
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+            except Exception as e:
+                debug.error(f"Failed to remove lock file {lock_file}:" ,e)
 
 def create_app():
-    app = FastAPI()
+    app = FastAPI(lifespan=lifespan)
 
     # Add CORS middleware
     app.add_middleware(
@@ -93,12 +123,8 @@ def create_app():
     if AppConfig.gui:
         if not has_a2wsgi:
             raise MissingRequirementsError("a2wsgi is required for GUI. Install it with: pip install a2wsgi")
-        gui_app = WSGIMiddleware(get_gui_app(AppConfig.demo))
+        gui_app = WSGIMiddleware(get_gui_app(AppConfig.demo, AppConfig.timeout))
         app.mount("/", gui_app)
-
-    # Read cookie files if not ignored
-    if not AppConfig.ignore_cookie_files:
-        read_cookie_files()
 
     if AppConfig.ignored_providers:
         for provider in AppConfig.ignored_providers:
@@ -148,6 +174,7 @@ class AppConfig:
     proxy: str = None
     gui: bool = False
     demo: bool = False
+    timeout: int = DEFAULT_TIMEOUT
 
     @classmethod
     def set_config(cls, **data):
@@ -326,6 +353,8 @@ class Api:
                     config.provider = AppConfig.provider if provider is None else provider
                 if config.conversation_id is None:
                     config.conversation_id = conversation_id
+                if config.timeout is None:
+                    config.timeout = AppConfig.timeout
                 if credentials is not None and credentials.credentials != "secret":
                     config.api_key = credentials.credentials
 
@@ -642,7 +671,10 @@ class Api:
         @self.app.post("/v1/upload_cookies", responses={
             HTTP_200_OK: {"model": List[FileResponseModel]},
         })
-        def upload_cookies(files: List[UploadFile]):
+        def upload_cookies(
+            files: List[UploadFile],
+            credentials: Annotated[HTTPAuthorizationCredentials, Depends(Api.security)] = None
+        ):
             response_data = []
             if not AppConfig.ignore_cookie_files:
                 for file in files:
@@ -670,8 +702,17 @@ class Api:
             HTTP_200_OK: {"content": {"image/*": {}, "audio/*": {}}, "video/*": {}},
             HTTP_404_NOT_FOUND: {}
         })
-        async def get_media(filename, request: Request):
+        async def get_media(filename, request: Request, thumbnail: bool = False):
+            def get_timestamp(str):
+                m=re.match("^[0-9]+", str)
+                if m:
+                    return int(m.group(0))
+                else:
+                    raise ValueError("No timestamp found in filename")
             target = os.path.join(get_media_dir(), os.path.basename(filename))
+            if thumbnail and has_pillow:
+                thumbnail_dir = os.path.join(get_media_dir(), "thumbnails")
+                thumbnail = os.path.join(thumbnail_dir, filename)
             if not os.path.isfile(target):
                 other_name = os.path.join(get_media_dir(), os.path.basename(quote_plus(filename)))
                 if os.path.isfile(other_name):
@@ -680,9 +721,11 @@ class Api:
             mime_type = EXTENSIONS_MAP.get(ext)
             stat_result = SimpleNamespace()
             stat_result.st_size = 0
-            if os.path.isfile(target):
+            stat_result.st_mtime = get_timestamp(filename)
+            if thumbnail and has_pillow and os.path.isfile(thumbnail):
+                stat_result.st_size = os.stat(thumbnail).st_size
+            elif not thumbnail and os.path.isfile(target):
                 stat_result.st_size = os.stat(target).st_size
-            stat_result.st_mtime = int(f"{filename.split('_')[0]}") if filename.startswith("1") else 0
             headers = {
                 "cache-control": "public, max-age=31536000",
                 "last-modified": formatdate(stat_result.st_mtime, usegmt=True),
@@ -690,7 +733,7 @@ class Api:
                 **({
                     "content-length": str(stat_result.st_size),
                 } if stat_result.st_size else {}),
-                **({} if mime_type is None else {
+                **({} if thumbnail or mime_type is None else {
                     "content-type": mime_type,
                 })
             }
@@ -724,16 +767,36 @@ class Api:
                         debug.error(f"Download failed:  {source_url}")
                         debug.error(e)
                         return RedirectResponse(url=source_url)
-            if not os.path.isfile(target):
+            if thumbnail and has_pillow:
+                try:
+                    if not os.path.isfile(thumbnail):
+                        image = Image.open(target)
+                        os.makedirs(thumbnail_dir, exist_ok=True)
+                        process_image(image, save=thumbnail)
+                        debug.log(f"Thumbnail created: {thumbnail}")
+                except Exception as e:
+                    logger.exception(e)
+            if thumbnail and os.path.isfile(thumbnail):
+                result = thumbnail
+            else:
+                result = target
+            if not os.path.isfile(result):
                 return ErrorResponse.from_message("File not found", HTTP_404_NOT_FOUND)
             async def stream():
-                with open(target, "rb") as file:
+                with open(result, "rb") as file:
                     while True:
                         chunk = file.read(65536)
                         if not chunk:
                             break
                         yield chunk
             return StreamingResponse(stream(), headers=headers)
+
+        @self.app.get("/thumbnail/{filename}", responses={
+            HTTP_200_OK: {"content": {"image/*": {}, "audio/*": {}}, "video/*": {}},
+            HTTP_404_NOT_FOUND: {}
+        })
+        async def get_media_thumbnail(filename: str, request: Request):
+            return await get_media(filename, request, True)
 
 def format_exception(e: Union[Exception, str], config: Union[ChatCompletionsConfig, ImageGenerationConfig] = None, image: bool = False) -> str:
     last_provider = {} if not image else g4f.get_last_provider(True)

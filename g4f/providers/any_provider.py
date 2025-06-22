@@ -11,26 +11,27 @@ from ..Provider.hf_space import HuggingSpace
 from ..Provider import __map__
 from ..Provider import Cloudflare, Gemini, Grok, DeepSeekAPI, PerplexityLabs, LambdaChat, PollinationsAI, PuterJS
 from ..Provider import Microsoft_Phi_4_Multimodal, DeepInfraChat, Blackbox, OIVSCodeSer2, OIVSCodeSer0501, TeachAnything
-from ..Provider import Together, WeWordle, Yqcloud, Chatai, Free2GPT, ARTA, ImageLabs, LegacyLMArena, LMArenaBeta
-from ..Provider import EdgeTTS, gTTS, MarkItDown, OpenAIFM
+from ..Provider import Together, WeWordle, Yqcloud, Chatai, Free2GPT, ImageLabs, LegacyLMArena, LMArenaBeta
+from ..Provider import EdgeTTS, gTTS, MarkItDown, OpenAIFM, Video
 from ..Provider import HarProvider, HuggingFace, HuggingFaceMedia
 from .base_provider import AsyncGeneratorProvider, ProviderModelMixin
 from .. import Provider
 from .. import models
+from .. import debug
 
 PROVIERS_LIST_1 = [
     OpenaiChat, PollinationsAI, Cloudflare, PerplexityLabs, Gemini, Grok, DeepSeekAPI, Blackbox, OpenAIFM,
-    OIVSCodeSer2, OIVSCodeSer0501, TeachAnything, Together, WeWordle, Yqcloud, Chatai, Free2GPT, ARTA, ImageLabs,
+    OIVSCodeSer2, OIVSCodeSer0501, TeachAnything, Together, WeWordle, Yqcloud, Chatai, Free2GPT, ImageLabs,
     HarProvider, LegacyLMArena, LMArenaBeta, LambdaChat, CopilotAccount, DeepInfraChat,
-    HuggingSpace, HuggingFace, HuggingFaceMedia, PuterJS, Together
+    HuggingSpace, HuggingFace, HuggingFaceMedia, Together
 ]
 
 PROVIERS_LIST_2 = [
-    OpenaiChat, CopilotAccount, PollinationsAI, PerplexityLabs, Gemini, Grok, ARTA
+    OpenaiChat, CopilotAccount, PollinationsAI, PerplexityLabs, Gemini, Grok
 ]
 
 PROVIERS_LIST_3 = [
-    HarProvider, LambdaChat, DeepInfraChat, HuggingFace, HuggingFaceMedia, LegacyLMArena, LMArenaBeta,
+    HarProvider, LambdaChat, DeepInfraChat, HuggingFace, HuggingFaceMedia, HarProvider, LegacyLMArena, LMArenaBeta,
     PuterJS, Together, Cloudflare, HuggingSpace
 ]
 
@@ -47,7 +48,6 @@ LABELS = {
     "phi": "Microsoft: Phi / WizardLM",
     "mistral": "Mistral",
     "PollinationsAI": "Pollinations AI",
-    "ARTA": "ARTA",
     "voices": "Voices",
     "perplexity": "Perplexity Labs",
     "openrouter": "OpenRouter",
@@ -80,7 +80,7 @@ class AnyProvider(AsyncGeneratorProvider, ProviderModelMixin):
             added = False
             # Check for models with prefix
             start = model.split(":")[0]
-            if start in ("PollinationsAI", "ARTA", "openrouter"):
+            if start in ("PollinationsAI", "openrouter"):
                 submodel = model.split(":", maxsplit=1)[1]
                 if submodel in OpenAIFM.voices or submodel in PollinationsAI.audio_models[PollinationsAI.default_audio_model]:
                     groups["voices"].append(submodel)
@@ -180,17 +180,20 @@ class AnyProvider(AsyncGeneratorProvider, ProviderModelMixin):
                 provider: ProviderType = provider
                 if not provider.working or provider.get_parent() in ignored:
                     continue
-                if provider == CopilotAccount:
-                    all_models.extend(list(provider.model_aliases.keys()))
-                elif provider in [PollinationsAI, ARTA]:
-                    all_models.extend([f"{provider.__name__}:{model}" for model in provider.get_models() if model not in all_models])
-                    cls.audio_models.update({f"{provider.__name__}:{model}": [] for model in provider.get_models() if model in provider.audio_models})
-                    cls.image_models.extend([f"{provider.__name__}:{model}" for model in provider.get_models() if model in provider.image_models])
-                    cls.vision_models.extend([f"{provider.__name__}:{model}" for model in provider.get_models() if model in provider.vision_models])
-                    if provider == PollinationsAI:
+                try:
+                    if provider == CopilotAccount:
                         all_models.extend(list(provider.model_aliases.keys()))
-                else:
-                    all_models.extend(provider.get_models())
+                    elif provider == PollinationsAI:
+                        all_models.extend([f"{provider.__name__}:{model}" for model in provider.get_models() if model not in all_models])
+                        cls.audio_models.update({f"{provider.__name__}:{model}": [] for model in provider.get_models() if model in provider.audio_models})
+                        cls.image_models.extend([f"{provider.__name__}:{model}" for model in provider.get_models() if model in provider.image_models])
+                        cls.vision_models.extend([f"{provider.__name__}:{model}" for model in provider.get_models() if model in provider.vision_models])
+                        all_models.extend(list(provider.model_aliases.keys()))
+                    else:
+                        all_models.extend(provider.get_models())
+                except Exception as e:
+                    debug.error(f"Error getting models for provider {provider.__name__}:", e)
+                    continue
 
                 # Update special model lists
                 if hasattr(provider, 'image_models'):
@@ -227,7 +230,11 @@ class AnyProvider(AsyncGeneratorProvider, ProviderModelMixin):
             for provider in PROVIERS_LIST_3:
                 if not provider.working or provider.get_parent() in ignored:
                     continue
-                new_models = provider.get_models()
+                try:
+                    new_models = provider.get_models()
+                except Exception as e:
+                    debug.error(f"Error getting models for provider {provider.__name__}:", e)
+                    continue
                 if provider == HuggingFaceMedia:
                     new_models = provider.video_models
                 model_map = {}
@@ -261,6 +268,9 @@ class AnyProvider(AsyncGeneratorProvider, ProviderModelMixin):
                 count = all_models.count(model)
                 if count > cls.models_count.get(model, 0):
                     cls.models_count.update({model: count})
+
+            cls.video_models.append("video")
+            all_models.append("video")
 
             # Deduplicate and store
             cls.models_storage[ignored_key] = list(dict.fromkeys([model if model else cls.default_model for model in all_models]))
@@ -322,14 +332,26 @@ class AnyProvider(AsyncGeneratorProvider, ProviderModelMixin):
                     if api_key.get(provider):
                         if provider in __map__ and __map__[provider] not in PROVIERS_LIST_1:
                             extra_providers.append(__map__[provider])
+            debug.log(f"Using extra providers: {[p.__name__ for p in extra_providers]}")
             for provider in PROVIERS_LIST_1 + extra_providers:
                 if provider.working:
                     provider_api_key = api_key
                     if isinstance(api_key, dict):
                         provider_api_key = api_key.get(provider.get_parent())
-                    provider_models = provider.get_models(api_key=provider_api_key) if provider_api_key else provider.get_models()
-                    if not model or model in provider_models or provider.model_aliases and model in provider.model_aliases:
+                    try:
+                        provider_models = provider.get_models(api_key=provider_api_key) if provider_api_key else provider.get_models()
+                    except Exception as e:
+                        debug.error(f"Error getting models for provider {provider.__name__}:", e)
+                        continue
+                    if model == "video":
+                        providers.append(Video)
+                    if model and provider == PuterJS:
                        providers.append(provider)
+                    elif not model or model in provider_models or provider.model_aliases and model in provider.model_aliases or model in provider.model_aliases.values():
+                       providers.append(provider)
+                    elif provider.__name__ == "GeminiPro":
+                        if model and "gemini" in model or "gemma" in model:
+                            providers.append(provider)
             if model in models.__models__:
                 for provider in models.__models__[model][1]:
                     providers.append(provider)
@@ -338,7 +360,9 @@ class AnyProvider(AsyncGeneratorProvider, ProviderModelMixin):
 
         if len(providers) == 0:
             raise ModelNotFoundError(f"AnyProvider: Model {model} not found in any provider.")
-    
+
+        debug.log(f"AnyProvider: Using providers: {[provider.__name__ for provider in providers]} for model '{model}'")
+
         async for chunk in IterListProvider(providers).create_async_generator(
             model,
             messages,

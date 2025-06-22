@@ -7,14 +7,14 @@ import base64
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+
 try:
-    from PIL.Image import open as open_image, new as new_image
-    from PIL.Image import FLIP_LEFT_RIGHT, ROTATE_180, ROTATE_270, ROTATE_90
+    from PIL import Image, ImageOps
     has_requirements = True
 except ImportError:
     has_requirements = False
 
-from ..typing import ImageType, Image
+from ..typing import ImageType
 from ..errors import MissingRequirementsError
 
 EXTENSIONS_MAP: dict[str, str] = {
@@ -40,7 +40,7 @@ EXTENSIONS_MAP: dict[str, str] = {
 MEDIA_TYPE_MAP: dict[str, str] = {value: key for key, value in EXTENSIONS_MAP.items()}
 MEDIA_TYPE_MAP["audio/webm"] = "webm"
 
-def to_image(image: ImageType, is_svg: bool = False) -> Image:
+def to_image(image: ImageType, is_svg: bool = False) -> Image.Image:
     """
     Converts the input image to a PIL Image object.
 
@@ -66,13 +66,13 @@ def to_image(image: ImageType, is_svg: bool = False) -> Image:
             image = image.read()
         buffer = BytesIO()
         cairosvg.svg2png(image, write_to=buffer)
-        return open_image(buffer)
+        return Image.open(buffer)
 
     if isinstance(image, bytes):
         is_accepted_format(image)
-        return open_image(BytesIO(image))
-    elif not isinstance(image, Image):
-        image = open_image(image)
+        return Image.open(BytesIO(image))
+    elif not isinstance(image, Image.Image):
+        image = Image.open(image)
         image.load()
         return image
 
@@ -116,6 +116,8 @@ def is_valid_media(data: ImageType = None, filename: str = None) -> str:
             media_type = EXTENSIONS_MAP[extension]
             if media_type.startswith("image/"):
                 return media_type
+    if not data:
+        return False
     if isinstance(data, bytes):
         return is_accepted_format(data)
     return is_data_uri_an_image(data)
@@ -150,9 +152,11 @@ def is_data_uri_an_image(data_uri: str) -> bool:
     Raises:
         ValueError: If the data URI is invalid or the image format is not allowed.
     """
+    if data_uri.startswith("https:") or data_uri.startswith("http:"):
+        return True
     # Check if the data URI starts with 'data:image' and contains an image format (e.g., jpeg, png, gif)
     if not re.match(r'data:image/(\w+);base64,', data_uri):
-        raise ValueError("Invalid data URI image.")
+        raise ValueError(f"Invalid data URI image. {data_uri[:10]}...")
     # Extract the image format from the data URI
     image_format = re.match(r'data:image/(\w+);base64,', data_uri).group(1).lower()
     # Check if the image format is one of the allowed formats (jpg, jpeg, png, gif)
@@ -198,23 +202,7 @@ def extract_data_uri(data_uri: str) -> bytes:
     data = base64.b64decode(data)
     return data
 
-def get_orientation(image: Image) -> int:
-    """
-    Gets the orientation of the given image.
-
-    Args:
-        image (Image): The image.
-
-    Returns:
-        int: The orientation value.
-    """
-    exif_data = image.getexif() if hasattr(image, 'getexif') else image._getexif()
-    if exif_data is not None:
-        orientation = exif_data.get(274) # 274 corresponds to the orientation tag in EXIF
-        if orientation is not None:
-            return orientation
-
-def process_image(image: Image, new_width: int, new_height: int) -> Image:
+def process_image(image: Image.Image, new_width: int = 800, new_height: int = 400, save: str = None) -> Image.Image:
     """
     Processes the given image by adjusting its orientation and resizing it.
 
@@ -226,28 +214,19 @@ def process_image(image: Image, new_width: int, new_height: int) -> Image:
     Returns:
         Image: The processed image.
     """
-    # Fix orientation
-    orientation = get_orientation(image)
-    if orientation:
-        if orientation > 4:
-            image = image.transpose(FLIP_LEFT_RIGHT)
-        if orientation in [3, 4]:
-            image = image.transpose(ROTATE_180)
-        if orientation in [5, 6]:
-            image = image.transpose(ROTATE_270)
-        if orientation in [7, 8]:
-            image = image.transpose(ROTATE_90)
-    # Resize image
+    image = ImageOps.exif_transpose(image)
     image.thumbnail((new_width, new_height))
     # Remove transparency
     if image.mode == "RGBA":
         image.load()
-        white = new_image('RGB', image.size, (255, 255, 255))
+        white = Image.open('RGB', image.size, (255, 255, 255))
         white.paste(image, mask=image.split()[-1])
         return white
     # Convert to RGB for jpg format
     elif image.mode != "RGB":
         image = image.convert("RGB")
+    elif save is not None:
+        image.save(save, exif=b"")
     return image
 
 def to_bytes(image: ImageType) -> bytes:
@@ -310,25 +289,30 @@ def to_input_audio(audio: ImageType, filename: str = None) -> str:
 def use_aspect_ratio(extra_body: dict, aspect_ratio: str) -> Image:
     extra_body = {key: value for key, value in extra_body.items() if value is not None}
     if extra_body.get("width") is None or extra_body.get("height") is None:
-        if aspect_ratio == "1:1":
-            extra_body = {
-                "width": extra_body.get("width", 1024),
-                "height": extra_body.get("height", 1024),
-                **extra_body
-            }
-        elif aspect_ratio == "16:9":
-            extra_body = {
-                "width": extra_body.get("width", 832),
-                "height": extra_body.get("height", 480),
-                **extra_body
-            }
-        elif aspect_ratio == "9:16":
-            extra_body = {
-                "width": extra_body.get("width", 480),
-                "height": extra_body.get("height", 832),
-                **extra_body
-            }
+        width, height = get_width_height(
+            aspect_ratio,
+            extra_body.get("width"),
+            extra_body.get("height")
+        )
+        extra_body = {
+            "width": width,
+            "height": height,
+            **extra_body
+        }
     return extra_body
+
+def get_width_height(
+    aspect_ratio: str,
+    width: Optional[int] = None,
+    height: Optional[int] = None
+) -> tuple[int, int]:
+    if aspect_ratio == "1:1":
+        return width or 1024, height or 1024
+    elif aspect_ratio == "16:9":
+        return width or 832, height or 480
+    elif aspect_ratio == "9:16":
+        return width or 480, height or 832,
+    return width, height
 
 class ImageRequest:
     def __init__(
