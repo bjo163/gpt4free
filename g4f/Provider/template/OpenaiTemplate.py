@@ -5,9 +5,10 @@ import requests
 from ..helper import filter_none, format_media_prompt
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
 from ...typing import Union, AsyncResult, Messages, MediaListType
-from ...requests import StreamSession, raise_for_status
+from ...requests import StreamSession, StreamResponse, raise_for_status, see_stream
 from ...image import use_aspect_ratio
-from ...providers.response import FinishReason, ToolCalls, Usage, ImageResponse, ProviderInfo
+from ...image.copy_images import save_response_media
+from ...providers.response import FinishReason, ToolCalls, Usage, ImageResponse, ProviderInfo, AudioResponse, Reasoning
 from ...tools.media import render_messages
 from ...errors import MissingAuthError, ResponseError
 from ... import debug
@@ -39,6 +40,8 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                 data = response.json()
                 data = data.get("data") if isinstance(data, dict) else data
                 cls.image_models = [model.get("id") for model in data if model.get("image")]
+                cls.vision_models = cls.vision_models.copy()
+                cls.vision_models += [model.get("id") for model in data if model.get("vision")]
                 cls.models = [model.get("id") for model in data]
                 if cls.sort_models:
                     cls.models.sort()
@@ -62,10 +65,11 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
         max_tokens: int = None,
         top_p: float = None,
         stop: Union[str, list[str]] = None,
-        stream: bool = False,
+        stream: bool = None,
         prompt: str = None,
         headers: dict = None,
         impersonate: str = None,
+        download_media: bool = True,
         extra_parameters: list[str] = ["tools", "parallel_tool_calls", "tool_choice", "reasoning_effort", "logit_bias", "modalities", "audio"],
         extra_body: dict = None,
         **kwargs
@@ -92,6 +96,9 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                     "model": model,
                     **use_aspect_ratio({"width": kwargs.get("width"), "height": kwargs.get("height")}, kwargs.get("aspect_ratio", None))
                 }
+                # Handle media if provided
+                if media is not None:
+                    data["image_url"] = next(iter([data for data, _ in media if data and isinstance(data, str) and data.startswith("http://") or data.startswith("https://")]), None)
                 async with session.post(f"{api_base.rstrip('/')}/images/generations", json=data, ssl=cls.ssl) as response:
                     data = await response.json()
                     cls.raise_error(data, response.status)
@@ -112,7 +119,7 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                 max_tokens=max_tokens,
                 top_p=top_p,
                 stop=stop,
-                stream=stream,
+                stream="audio" not in extra_parameters if stream is None else stream,
                 **extra_parameters,
                 **extra_body
             )
@@ -121,51 +128,8 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                 if api_endpoint is None:
                     api_endpoint = f"{api_base.rstrip('/')}/chat/completions"
             async with session.post(api_endpoint, json=data, ssl=cls.ssl) as response:
-                content_type = response.headers.get("content-type", "text/event-stream" if stream else "application/json")
-                if content_type.startswith("application/json"):
-                    data = await response.json()
-                    cls.raise_error(data, response.status)
-                    await raise_for_status(response)
-                    model = data.get("model")
-                    if model:
-                        yield ProviderInfo(**cls.get_dict(), model=model)
-                    if "usage" in data:
-                        yield Usage(**data["usage"])
-                    if "choices" in data:
-                        choice = data["choices"][0]
-                        if "content" in choice["message"] and choice["message"]["content"]:
-                            yield choice["message"]["content"].strip()
-                        if "tool_calls" in choice["message"]:
-                            yield ToolCalls(choice["message"]["tool_calls"])
-                        if "finish_reason" in choice and choice["finish_reason"] is not None:
-                            yield FinishReason(choice["finish_reason"])
-                            return
-                elif content_type.startswith("text/event-stream"):
-                    await raise_for_status(response)
-                    first = True
-                    model_returned = False
-                    async for data in response.sse():
-                        cls.raise_error(data)
-                        model = data.get("model")
-                        if not model_returned and model:
-                            yield ProviderInfo(**cls.get_dict(), model=model)
-                            model_returned = True
-                        choice = data["choices"][0]
-                        if "content" in choice["delta"] and choice["delta"]["content"]:
-                            delta = choice["delta"]["content"]
-                            if first:
-                                delta = delta.lstrip()
-                            if delta:
-                                first = False
-                                yield delta
-                        if "usage" in data and data["usage"]:
-                            yield Usage(**data["usage"])
-                        if "finish_reason" in choice and choice["finish_reason"] is not None:
-                            yield FinishReason(choice["finish_reason"])
-                            break
-                else:
-                    await raise_for_status(response)
-                    raise ResponseError(f"Not supported content-type: {content_type}")
+                async for chunk in read_response(response, stream, prompt, cls.get_dict(), download_media):
+                    yield chunk
 
     @classmethod
     def get_headers(cls, stream: bool, api_key: str = None, headers: dict = None) -> dict:
@@ -178,3 +142,74 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
             ),
             **({} if headers is None else headers)
         }
+    
+async def read_response(response: StreamResponse, stream: bool, prompt: str, provider_info: dict, download_media: bool):
+    content_type = response.headers.get("content-type", "text/event-stream" if stream else "application/json")
+    if content_type.startswith("text/plain"):
+        yield await response.text()
+    elif content_type.startswith("application/json"):
+        data = await response.json()
+        OpenaiTemplate.raise_error(data, response.status)
+        await raise_for_status(response)
+        model = data.get("model")
+        if model:
+            yield ProviderInfo(**provider_info, model=model)
+        if "usage" in data:
+            yield Usage(**data["usage"])
+        if "choices" in data:
+            choice = next(iter(data["choices"]), None)
+            message = choice.get("message", {})
+            if choice and "content" in message and message["content"]:
+                yield message["content"].strip()
+            if "tool_calls" in message:
+                yield ToolCalls(message["tool_calls"])
+            audio = message.get("audio", {})
+            if "data" in audio:
+                if download_media:
+                    async for chunk in save_response_media(audio, prompt, [model]):
+                        yield chunk
+                else:
+                    yield AudioResponse(f"data:audio/mpeg;base64,{audio['data']}", transcript=audio.get("transcript"))
+            if choice and "finish_reason" in choice and choice["finish_reason"] is not None:
+                yield FinishReason(choice["finish_reason"])
+                return
+    elif content_type.startswith("text/event-stream"):
+        await raise_for_status(response)
+        reasoning = False
+        first = True
+        model_returned = False
+        async for data in see_stream(response):
+            OpenaiTemplate.raise_error(data)
+            model = data.get("model")
+            if not model_returned and model:
+                yield ProviderInfo(**provider_info, model=model)
+                model_returned = True
+            choice = next(iter(data["choices"]), None)
+            if not choice:
+                continue
+            if "content" in choice["delta"] and choice["delta"]["content"]:
+                delta = choice["delta"]["content"]
+                if first:
+                    delta = delta.lstrip()
+                if delta:
+                    first = False
+                    if reasoning:
+                        yield Reasoning(status="")
+                        reasoning = False
+                    yield delta
+            tool_calls = choice.get("delta", {}).get("tool_calls")
+            if tool_calls:
+                yield ToolCalls(choice["delta"]["tool_calls"])
+            reasoning_content = choice.get("delta", {}).get("reasoning_content")
+            if reasoning_content:
+                reasoning = True
+                yield Reasoning(reasoning_content)
+            if "usage" in data and data["usage"]:
+                yield Usage(**data["usage"])
+            if choice and choice.get("finish_reason") is not None:
+                yield FinishReason(choice["finish_reason"])
+                break
+    else:
+        await raise_for_status(response)
+        async for chunk in save_response_media(response, prompt, [model]):
+            yield chunk

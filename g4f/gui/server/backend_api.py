@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import flask
 import os
+import time
 import logging
 import asyncio
 import shutil
 import random
 import datetime
+from hashlib import sha256
 from urllib.parse import quote_plus
 from flask import Flask, Response, redirect, request, jsonify, send_from_directory
 from werkzeug.exceptions import NotFound
@@ -26,6 +28,11 @@ try:
     has_markitdown = True
 except ImportError as e:
     has_markitdown = False
+try:
+    from .crypto import rsa, serialization, create_or_read_keys, decrypt_data, encrypt_data, get_session_key
+    has_crypto = True
+except ImportError:
+    has_crypto = False
 
 from ...client.service import convert_to_provider
 from ...providers.asyncio import to_sync_generator
@@ -37,9 +44,8 @@ from ...errors import ProviderNotFoundError
 from ...image import is_allowed_extension, process_image, MEDIA_TYPE_MAP
 from ...cookies import get_cookies_dir
 from ...image.copy_images import secure_filename, get_source_url, get_media_dir, copy_media
-from ... import ChatCompletion
+from ...client.service import get_model_and_provider
 from ... import models
-from ... import debug
 from .api import Api
 
 logger = logging.getLogger(__name__)
@@ -71,6 +77,41 @@ class Backend_Api(Api):
         """
         self.app: Flask = app
         self.chat_cache = {}
+
+        if has_crypto:
+            private_key_obj = get_session_key()
+            public_key_obj = private_key_obj.public_key()
+            public_key_pem = public_key_obj.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            sub_private_key, sub_public_key = create_or_read_keys()
+
+            def validate_secret(secret: str) -> bool:
+                """
+                Validates the provided secret against the stored public key.
+
+                Args:
+                    secret (str): The secret to validate.
+
+                Returns:
+                    bool: True if the secret is valid, False otherwise.
+                """
+                try:
+                    decrypted_secret = decrypt_data(sub_private_key, decrypt_data(private_key_obj, secret))
+                    timediff = time.time() - int(decrypted_secret)
+                    return timediff <= 3 and timediff >= 0
+                except Exception as e:
+                    logger.error(f"Secret validation failed: {e}")
+                    return False
+
+            @app.route('/backend-api/v2/public-key', methods=['GET'])
+            def get_public_key():
+                # Send the public key to the client for encryption
+                return jsonify({
+                    "public_key": public_key_pem.decode(),
+                    "data": encrypt_data(sub_public_key, str(int(time.time())))
+                })
 
         @app.route('/backend-api/v2/models', methods=['GET'])
         def jsonify_models(**kwargs):
@@ -110,9 +151,18 @@ class Backend_Api(Api):
                 Response: A Flask response object for streaming.
             """
             if "json" in request.form:
-                json_data = json.loads(request.form['json'])
+                json_data = request.form['json']
             else:
-                json_data = request.json
+                json_data = request.data
+            try:
+                json_data = json.loads(json_data)
+            except json.JSONDecodeError as e:
+                logger.exception(e)
+                return jsonify({"error": {"message": "Invalid JSON data"}}), 400
+            if app.demo and has_crypto:
+                secret = request.headers.get("x_secret")
+                if not secret or not validate_secret(secret):
+                    return jsonify({"error": {"message": "Invalid or missing secret"}}), 403
             tempfiles = []
             media = []
             if "files" in request.files:
@@ -135,13 +185,9 @@ class Backend_Api(Api):
                 else:
                     json_data["provider"] = models.HuggingFace
             if app.demo:
-                user = request.headers.get("Cf-Ipcountry", "")
-                ip = request.headers.get("X-Forwarded-For", "").split(":")[-1]
-                json_data["user"] = request.headers.get("x_user", f"{user}:{ip}")
+                json_data["user"] = request.headers.get("x-user", "error")
                 json_data["referer"] = request.headers.get("referer", "")
                 json_data["user-agent"] = request.headers.get("user-agent", "")
-                if not json_data.get("referer") or "python" in json_data.get("user-agent", "").lower():
-                    return "Reduce your requests to 2 at the same time. I only have a budget of 4. More requests cause errors in the console.", 403
             kwargs = self._prepare_conversation_kwargs(json_data)
             return self.app.response_class(
                 safe_iter_generator(self._create_response_stream(
@@ -165,6 +211,12 @@ class Backend_Api(Api):
             with cache_file.open("a" if cache_file.exists() else "w") as f:
                 f.write(f"{json.dumps(request.json)}\n")
             return {}
+    
+        @app.route('/backend-api/v2/usage/<date>', methods=['GET'])
+        def get_usage(date: str):
+            cache_dir = Path(get_cookies_dir()) / ".usage"
+            cache_file = cache_dir / f"{date}.jsonl"
+            return cache_file.read_text() if cache_file.exists() else (jsonify({"error": {"message": "No usage data found for this date"}}), 404)
 
         @app.route('/backend-api/v2/log', methods=['POST'])
         def add_log():
@@ -231,7 +283,7 @@ class Backend_Api(Api):
             },
         }
 
-        @app.route('/backend-api/v2/create', methods=['GET', 'POST'])
+        @app.route('/backend-api/v2/create', methods=['GET'])
         def create():
             try:
                 tool_calls = []
@@ -248,12 +300,15 @@ class Backend_Api(Api):
                     })
                 do_filter = request.args.get("filter_markdown", request.args.get("json"))
                 cache_id = request.args.get('cache')
+                model, provider_handler = get_model_and_provider(
+                    request.args.get("model"), request.args.get("provider", request.args.get("audio_provider")),
+                    stream=request.args.get("stream") and not do_filter and not cache_id,
+                    ignore_stream=not request.args.get("stream"),
+                )
                 parameters = {
-                    "model": request.args.get("model"),
+                    "model": model,
                     "messages": [{"role": "user", "content": request.args.get("prompt")}],
-                    "provider": request.args.get("provider", request.args.get("audio_provider", "AnyProvider")),
                     "stream": not do_filter and not cache_id,
-                    "ignore_stream": not request.args.get("stream"),
                     "tool_calls": tool_calls,
                 }
                 if request.args.get("audio_provider") or request.args.get("audio"):
@@ -284,7 +339,7 @@ class Backend_Api(Api):
                                 if chunk:
                                     yield chunk
                     return iter_response()
-                
+
                 if cache_id:
                     cache_id = sha256(cache_id.encode() + json.dumps(parameters, sort_keys=True).encode()).hexdigest()
                     cache_dir = Path(get_cookies_dir()) / ".scrape_cache" / "create"
@@ -294,7 +349,7 @@ class Backend_Api(Api):
                         with cache_file.open("r") as f:
                             response = f.read()
                     if not response:
-                        response = iter_run_tools(ChatCompletion.create, **parameters)
+                        response = iter_run_tools(provider_handler, **parameters)
                         cache_dir.mkdir(parents=True, exist_ok=True)
                         response = cast_str(response)
                         response = response if isinstance(response, str) else "".join(response)
@@ -302,7 +357,7 @@ class Backend_Api(Api):
                             with cache_file.open("w") as f:
                                 f.write(response)
                 else:
-                    response = cast_str(iter_run_tools(ChatCompletion.create, **parameters))
+                    response = cast_str(iter_run_tools(provider_handler, **parameters))
                 if isinstance(response, str) and "\n" not in response:
                     if response.startswith("/media/"):
                         media_dir = get_media_dir()
@@ -343,7 +398,7 @@ class Backend_Api(Api):
             delete_files = request.args.get('delete_files', True)
             refine_chunks_with_spacy = request.args.get('refine_chunks_with_spacy', False)
             event_stream = 'text/event-stream' in request.headers.get('Accept', '')
-            mimetype = "text/event-stream" if event_stream else "text/plain";
+            mimetype = "text/event-stream" if event_stream else "text/plain"
             return Response(get_streaming(bucket_dir, delete_files, refine_chunks_with_spacy, event_stream), mimetype=mimetype)
 
         @self.app.route('/backend-api/v2/files/<bucket_id>', methods=['POST'])
@@ -362,18 +417,18 @@ class Backend_Api(Api):
                 suffix = os.path.splitext(filename)[1].lower()
                 copyfile = get_tempfile(file, suffix)
                 result = None
-                if has_markitdown and not filename.endswith((".md", ".json")):
+                if has_markitdown and not filename.endswith((".md", ".json", ".zip")):
                     try:
                         language = request.headers.get("x-recognition-language")
                         md = MarkItDown()
                         result = md.convert(copyfile, stream_info=StreamInfo(
                             extension=suffix,
                             mimetype=file.mimetype,
-                        ),recognition_language=language).text_content
+                        ), recognition_language=language).text_content
                     except Exception as e:
                         logger.exception(e)
                 is_media = is_allowed_extension(filename)
-                is_supported = supports_filename(filename)
+                is_supported = result or supports_filename(filename)
                 if not is_media and not is_supported:
                     os.remove(copyfile)
                     continue
@@ -384,18 +439,21 @@ class Backend_Api(Api):
                 if is_media:
                     os.makedirs(media_dir, exist_ok=True)
                     newfile = os.path.join(media_dir, filename)
-                    if result:
-                        media.append({"name": filename, "text": result})
-                    else:
-                        media.append({"name": filename})
+                    image_size = {}
                     if has_pillow:
                         try:
                             image = Image.open(copyfile)
+                            width, height = image.size
+                            image_size = {"width": width, "height": height}
                             thumbnail_dir = os.path.join(bucket_dir, "thumbnail")
                             os.makedirs(thumbnail_dir, exist_ok=True)
                             process_image(image, save=os.path.join(thumbnail_dir, filename))
                         except Exception as e:
                             logger.exception(e)
+                    if result:
+                        media.append({"name": filename, "text": result, **image_size})
+                    else:
+                        media.append({"name": filename, **image_size})
                 elif is_supported and not result:
                     newfile = os.path.join(bucket_dir, filename)
                     filenames.append(filename)

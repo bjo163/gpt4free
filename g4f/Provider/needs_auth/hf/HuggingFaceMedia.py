@@ -7,14 +7,14 @@ import requests
 
 from ....providers.types import Messages
 from ....requests import StreamSession, raise_for_status
-from ....errors import ModelNotFoundError
+from ....errors import ModelNotFoundError, MissingAuthError
 from ....providers.helper import format_media_prompt
 from ....providers.base_provider import AsyncGeneratorProvider, ProviderModelMixin
 from ....providers.response import ProviderInfo, ImageResponse, VideoResponse, Reasoning
 from ....image.copy_images import save_response_media
 from ....image import use_aspect_ratio
 from .... import debug
-from .models import model_aliases
+from .models import image_model_aliases
 
 class HuggingFaceMedia(AsyncGeneratorProvider, ProviderModelMixin):
     label = "HuggingFace"
@@ -22,8 +22,7 @@ class HuggingFaceMedia(AsyncGeneratorProvider, ProviderModelMixin):
     url = "https://huggingface.co"
     working = True
     needs_auth = True
-
-    model_aliases = model_aliases
+    model_aliases = image_model_aliases
 
     tasks = ["text-to-image", "text-to-video"]
     provider_mapping: dict[str, dict] = {}
@@ -115,6 +114,8 @@ class HuggingFaceMedia(AsyncGeneratorProvider, ProviderModelMixin):
         resolution: str = "480p",
         **kwargs
     ):
+        if not api_key:
+            raise MissingAuthError('Add a "api_key"')
         if extra_body is None:
             extra_body = {}
         selected_provider = None

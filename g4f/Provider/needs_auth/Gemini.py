@@ -20,7 +20,7 @@ except ImportError:
 
 from ... import debug
 from ...typing import Messages, Cookies, MediaListType, AsyncResult, AsyncIterator
-from ...providers.response import JsonConversation, Reasoning, RequestLogin, ImageResponse, YouTube, AudioResponse, TitleGeneration
+from ...providers.response import JsonConversation, Reasoning, RequestLogin, ImageResponse, YouTubeResponse, AudioResponse, TitleGeneration
 from ...requests.raise_for_status import raise_for_status
 from ...requests.aiohttp import get_connector
 from ...requests import get_nodriver
@@ -59,7 +59,7 @@ UPLOAD_IMAGE_HEADERS = {
 }
 GOOGLE_COOKIE_DOMAIN = ".google.com"
 ROTATE_COOKIES_URL = "https://accounts.google.com/RotateCookies"
-GGOGLE_SID_COOKIE = "__Secure-1PSID"
+GOOGLE_SID_COOKIE = "__Secure-1PSID"
 
 models = {
     "gemini-2.5-pro-exp": {"x-goog-ext-525001261-jspb": '[1,null,null,null,"2525e3954d185b3c"]'},
@@ -70,6 +70,9 @@ models = {
     "gemini-2.0-flash-exp": {"x-goog-ext-525001261-jspb": '[null,null,null,null,"f299729663a2343f"]'},
     "gemini-2.0-flash-thinking": {"x-goog-ext-525001261-jspb": '[null,null,null,null,"9c17b1863f581b8a"]'},
     "gemini-2.0-flash-thinking-with-apps": {"x-goog-ext-525001261-jspb": '[null,null,null,null,"f8f8f5ea629f5d37"]'},
+    # Currently used models
+    "gemini-2.5-pro": {"x-goog-ext-525001261-jspb", '[1,null,null,null,"61530e79959ab139",null,null,null,[4]]'},
+    "gemini-2.5-flash": {"x-goog-ext-525001261-jspb", '[1,null,null,null,"9ec249fc9ad08861",null,null,null,[4]]'},
     "gemini-audio": {}
 }
 
@@ -86,12 +89,11 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
     default_vision_model = default_model
     image_models = [default_image_model]
     models = [
-        default_model, *models.keys()
+        default_model, "gemini-2.5-flash", "gemini-2.5-pro"
     ]
     model_aliases = {
         "gemini-2.0": "",
         "gemini-2.0-flash": ["gemini-2.0-flash", "gemini-2.0-flash", "gemini-2.0-flash-exp"],
-        "gemini-2.5-pro": "gemini-2.5-pro-exp",
     }
 
     synthesize_content_type = "audio/vnd.wav"
@@ -152,11 +154,12 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         """
 
         while True:
+            new_1psidts = None
             try:
                 new_1psidts = await rotate_1psidts(cls.url, cls._cookies, proxy)
             except Exception as e:
                 debug.error(f"Failed to refresh cookies: {e}")
-                task = cls.rotate_tasks.get(cls._cookies[GGOGLE_SID_COOKIE])
+                task = cls.rotate_tasks.get(cls._cookies[GOOGLE_SID_COOKIE])
                 if task:
                     task.cancel()
                 debug.error(
@@ -220,10 +223,10 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                 await cls.fetch_snlm0e(session, cls._cookies)
             if not cls._snlm0e:
                 raise RuntimeError("Invalid cookies. SNlM0e not found")
-            if GGOGLE_SID_COOKIE in cls._cookies:
-                task = cls.rotate_tasks.get(cls._cookies[GGOGLE_SID_COOKIE])
+            if GOOGLE_SID_COOKIE in cls._cookies:
+                task = cls.rotate_tasks.get(cls._cookies[GOOGLE_SID_COOKIE])
                 if not task:
-                    cls.rotate_tasks[cls._cookies[GGOGLE_SID_COOKIE]] = asyncio.create_task(
+                    cls.rotate_tasks[cls._cookies[GOOGLE_SID_COOKIE]] = asyncio.create_task(
                         cls.start_auto_refresh()
                     )
 
@@ -335,7 +338,7 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                                 pass
                         youtube_ids = youtube_ids if youtube_ids else find_youtube_ids(content)
                         if youtube_ids:
-                            yield YouTube(youtube_ids)
+                            yield YouTubeResponse(youtube_ids)
 
     @classmethod
     async def synthesize(cls, params: dict, proxy: str = None) -> AsyncIterator[bytes]:

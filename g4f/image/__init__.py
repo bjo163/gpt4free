@@ -7,6 +7,7 @@ import base64
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 try:
     from PIL import Image, ImageOps
@@ -16,6 +17,7 @@ except ImportError:
 
 from ..typing import ImageType
 from ..errors import MissingRequirementsError
+from ..files import get_bucket_dir
 
 EXTENSIONS_MAP: dict[str, str] = {
     # Image
@@ -162,6 +164,7 @@ def is_data_uri_an_image(data_uri: str) -> bool:
     # Check if the image format is one of the allowed formats (jpg, jpeg, png, gif)
     if image_format not in EXTENSIONS_MAP and image_format != "svg+xml":
         raise ValueError("Invalid image format (from mime file type).")
+    return True
 
 def is_accepted_format(binary_data: bytes) -> str:
     """
@@ -202,7 +205,7 @@ def extract_data_uri(data_uri: str) -> bytes:
     data = base64.b64decode(data)
     return data
 
-def process_image(image: Image.Image, new_width: int = 800, new_height: int = 400, save: str = None) -> Image.Image:
+def process_image(image: Image.Image, new_width: int = 400, new_height: int = 400, save: str = None) -> Image.Image:
     """
     Processes the given image by adjusting its orientation and resizing it.
 
@@ -218,14 +221,15 @@ def process_image(image: Image.Image, new_width: int = 800, new_height: int = 40
     image.thumbnail((new_width, new_height))
     # Remove transparency
     if image.mode == "RGBA":
-        image.load()
-        white = Image.open('RGB', image.size, (255, 255, 255))
-        white.paste(image, mask=image.split()[-1])
-        return white
+        # image.load()
+        # white = Image.new('RGB', image.size, (255, 255, 255))
+        # white.paste(image, mask=image.split()[-1])
+        # image = white
+        pass
     # Convert to RGB for jpg format
     elif image.mode != "RGB":
         image = image.convert("RGB")
-    elif save is not None:
+    if save is not None:
         image.save(save, exif=b"")
     return image
 
@@ -241,15 +245,26 @@ def to_bytes(image: ImageType) -> bytes:
     """
     if isinstance(image, bytes):
         return image
-    elif isinstance(image, str) and image.startswith("data:"):
-        is_data_an_media(image)
-        return extract_data_uri(image)
-    elif isinstance(image, Image):
+    elif isinstance(image, str):
+        if image.startswith("data:"):
+            is_data_uri_an_image(image)
+            return extract_data_uri(image)
+        elif image.startswith("http://") or image.startswith("https://"):
+            path: str = urlparse(image).path
+            if path.startswith("/files/"):
+                path = get_bucket_dir(*path.split("/")[2:])
+                if os.path.exists(path):
+                    return Path(path).read_bytes()
+                else:
+                    raise FileNotFoundError(f"File not found: {path}")
+        else:
+            raise ValueError("Invalid image format. Expected bytes, str, or PIL Image.")
+    elif isinstance(image, Image.Image):
         bytes_io = BytesIO()
         image.save(bytes_io, image.format)
         image.seek(0)
         return bytes_io.getvalue()
-    elif isinstance(image, (str, os.PathLike)):
+    elif isinstance(image, os.PathLike):
         return Path(image).read_bytes()
     elif isinstance(image, Path):
         return image.read_bytes()
@@ -299,7 +314,7 @@ def use_aspect_ratio(extra_body: dict, aspect_ratio: str) -> Image:
             "height": height,
             **extra_body
         }
-    return extra_body
+    return {key: value for key, value in extra_body.items() if value is not None}
 
 def get_width_height(
     aspect_ratio: str,

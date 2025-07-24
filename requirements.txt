@@ -4,7 +4,6 @@ curl_cffi>=0.6.2
 aiohttp
 certifi
 browser_cookie3
-duckduckgo-search>=5.0
 nest_asyncio
 werkzeug
 pillow
@@ -20,3 +19,5 @@ nodriver
 python-multipart
 markitdown[all]
 a2wsgi
+python-dotenv
+ddgs

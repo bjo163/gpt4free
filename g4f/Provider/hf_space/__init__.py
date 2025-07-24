@@ -7,6 +7,7 @@ from ...errors import ResponseError
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin
 
 from .BlackForestLabs_Flux1Dev       import BlackForestLabs_Flux1Dev
+from .BlackForestLabs_Flux1KontextDev import BlackForestLabs_Flux1KontextDev
 from .CohereForAI_C4AI_Command       import CohereForAI_C4AI_Command
 from .DeepseekAI_JanusPro7b          import DeepseekAI_JanusPro7b
 from .Microsoft_Phi_4_Multimodal     import Microsoft_Phi_4_Multimodal
@@ -19,14 +20,15 @@ from .StabilityAI_SD35Large          import StabilityAI_SD35Large
 
 class HuggingSpace(AsyncGeneratorProvider, ProviderModelMixin):
     url = "https://huggingface.co/spaces"
-
     working = True
+    active_by_default = True
 
     default_model = Qwen_Qwen_2_72B.default_model
     default_image_model = BlackForestLabs_Flux1Dev.default_model
     default_vision_model = Microsoft_Phi_4_Multimodal.default_model
     providers = [
         BlackForestLabs_Flux1Dev,
+        BlackForestLabs_Flux1KontextDev,
         CohereForAI_C4AI_Command,
         DeepseekAI_JanusPro7b,
         Microsoft_Phi_4_Multimodal,

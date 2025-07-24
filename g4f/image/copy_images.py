@@ -60,17 +60,26 @@ def update_filename(response, filename: str) -> str:
     timestamp = datetime.strptime(date, '%a, %d %b %Y %H:%M:%S %Z').timestamp()
     return str(int(timestamp)) + "_" + filename.split("_", maxsplit=1)[-1]
 
-async def save_response_media(response, prompt: str, tags: list[str]) -> AsyncIterator:
+async def save_response_media(response, prompt: str, tags: list[str] = [], transcript: str = None) -> AsyncIterator:
     """Save media from response to local file and return URL"""
+    if isinstance(response, dict):
+        content_type = response.get("mimeType", "audio/mpeg")
+        transcript = response.get("transcript")
+        response = response.get("data")
+    elif hasattr(response, "headers"):
+        content_type = response.headers["content-type"]
+    else:
+        raise ValueError("Response must be a dict or have headers")
+
     if isinstance(response, str):
         response = base64.b64decode(response)
-    content_type = response.headers["content-type"] if hasattr(response, "headers") else "audio/mpeg"
     extension = MEDIA_TYPE_MAP.get(content_type)
     if extension is None:
         raise ValueError(f"Unsupported media type: {content_type}")
 
     filename = get_filename(tags, prompt, f".{extension}", prompt)
-    filename = update_filename(response, filename)
+    if hasattr(response, "headers"):
+        filename = update_filename(response, filename)
     target_path = os.path.join(get_media_dir(), filename)
     ensure_media_dir()
     with open(target_path, 'wb') as f:
@@ -93,7 +102,7 @@ async def save_response_media(response, prompt: str, tags: list[str]) -> AsyncIt
         source_url = str(response.url)
 
     if content_type.startswith("audio/"):
-        yield AudioResponse(media_url, text=prompt, source_url=source_url)
+        yield AudioResponse(media_url, transcript, source_url=source_url)
     elif content_type.startswith("video/"):
         yield VideoResponse(media_url, prompt, source_url=source_url)
     else:
@@ -104,7 +113,7 @@ def get_filename(tags: list[str], alt: str, extension: str, image: str) -> str:
     return "".join((
         f"{int(time.time())}_",
         f"{secure_filename(tags + alt)}_" if alt else secure_filename(tags),
-        hashlib.sha256(image.encode()).hexdigest()[:16],
+        hashlib.sha256(str(time.time()).encode() if image is None else image.encode()).hexdigest()[:16],
         extension
     ))
 
@@ -119,21 +128,21 @@ async def copy_media(
     target: str = None,
     thumbnail: bool = False,
     ssl: bool = None,
-    timeout: Optional[int] = None
+    timeout: Optional[int] = None,
+    return_target: bool = False
 ) -> list[str]:
     """
     Download and store images locally with Unicode-safe filenames
     Returns list of relative image URLs
     """
-    if add_url:
-        add_url = not cookies
     ensure_media_dir()
     media_dir = get_media_dir()
     if thumbnail:
         media_dir = os.path.join(media_dir, "thumbnails")
         if not os.path.exists(media_dir):
             os.makedirs(media_dir, exist_ok=True)
-
+    if headers is not None or cookies is not None:
+        add_url = False  # Do not add URL if headers or cookies are provided
     async with ClientSession(
         connector=get_connector(proxy=proxy),
         cookies=cookies,
@@ -198,9 +207,12 @@ async def copy_media(
                     except ValueError:
                         pass
                 if thumbnail:
-                    return "/thumbnail/" + os.path.basename(target_path)
-                # Build URL relative to media directory
-                return f"/media/{os.path.basename(target_path)}" + ('?' + (add_url if isinstance(add_url, str) else '' + 'url=' + quote(image)) if add_url and not image.startswith('data:') else '')
+                    uri = "/thumbnail/" + os.path.basename(target_path)
+                else:
+                    uri = f"/media/{os.path.basename(target_path)}" + ('?' + (add_url if isinstance(add_url, str) else '' + 'url=' + quote(image)) if add_url and not image.startswith('data:') else '')
+                if return_target:
+                    return uri, target_path
+                return uri
 
             except (ClientError, IOError, OSError, ValueError) as e:
                 debug.error(f"Image copying failed:", e)

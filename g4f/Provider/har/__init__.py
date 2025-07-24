@@ -4,83 +4,56 @@ import os
 import json
 import uuid
 import random
+import asyncio
 from urllib.parse import urlparse
 
 from ...typing import AsyncResult, Messages, MediaListType
 from ...requests import DEFAULT_HEADERS, StreamSession, StreamResponse, FormData, raise_for_status
-from ...providers.response import JsonConversation
+from ...providers.response import JsonConversation, AuthResult
+from ...requests import get_args_from_nodriver, has_nodriver
 from ...tools.media import merge_media
 from ...image import to_bytes, is_accepted_format
 from ...errors import ResponseError
-from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin
+from ..base_provider import AsyncAuthedProvider, ProviderModelMixin
 from ..helper import get_last_user_message
-from ..openai.har_file import get_headers
 from ..LegacyLMArena import LegacyLMArena
+from ... import debug
 
-class HarProvider(AsyncGeneratorProvider, ProviderModelMixin):
+class HarProvider(AsyncAuthedProvider, ProviderModelMixin):
     label = "LMArena (Har)"
     url = "https://legacy.lmarena.ai"
     api_endpoint = "/queue/join?"
     working = True
-    default_model = "chatgpt-4o-latest-20250326"
-    model_aliases = LegacyLMArena.model_aliases
-    vision_models = [
-		"o3-2025-04-16",
-		"o4-mini-2025-04-16",
-		"gpt-4.1-2025-04-14",
-		"gemini-2.5-pro-exp-03-25",
-		"claude-3-7-sonnet-20250219",
-		"claude-3-7-sonnet-20250219-thinking-32k",
-		"llama-4-maverick-17b-128e-instruct",
-		"gpt-4.1-mini-2025-04-14",
-		"gpt-4.1-nano-2025-04-14",
-		"gemini-2.0-flash-thinking-exp-01-21",
-		"gemini-2.0-flash-001",
-		"gemini-2.0-flash-lite-preview-02-05",
-		"claude-3-5-sonnet-20241022",
-		"gpt-4o-mini-2024-07-18",
-		"gpt-4o-2024-11-20",
-		"gpt-4o-2024-08-06",
-		"gpt-4o-2024-05-13",
-		"claude-3-5-sonnet-20240620",
-		"doubao-1.5-vision-pro-32k-250115",
-		"amazon-nova-pro-v1.0",
-		"amazon-nova-lite-v1.0",
-		"qwen2.5-vl-32b-instruct",
-		"qwen2.5-vl-72b-instruct",
-		"gemini-1.5-pro-002",
-		"gemini-1.5-flash-002",
-		"gemini-1.5-flash-8b-001",
-		"gemini-1.5-pro-001",
-		"gemini-1.5-flash-001",
-		"hunyuan-standard-vision-2024-12-31",
-		"pixtral-large-2411",
-		"step-1o-vision-32k-highres",
-		"claude-3-haiku-20240307",
-		"claude-3-sonnet-20240229",
-		"claude-3-opus-20240229",
-		"qwen-vl-max-1119",
-		"qwen-vl-max-0809",
-		"reka-core-20240904",
-		"reka-flash-20240904",
-		"c4ai-aya-vision-32b",
-		"pixtral-12b-2409"
-	]
+    active_by_default = True
+    default_model = LegacyLMArena.default_model
 
     @classmethod
-    def get_models(cls):
-        for domain, harFile in read_har_files():
-            for v in harFile['log']['entries']:
-                request_url = v['request']['url']
-                if domain not in request_url or "." in urlparse(request_url).path or "heartbeat" in request_url:
-                    continue
-                if "\n\ndata: " not in v['response']['content']['text']:
-                    continue
-                chunk = v['response']['content']['text'].split("\n\ndata: ")[2]
-                cls.models = list(dict.fromkeys(get_str_list(find_list(json.loads(chunk), 'choices'))).keys())
-                cls.models[0] = cls.default_model
-                if cls.models:
-                    break
+    async def on_auth_async(cls, proxy: str = None, **kwargs):
+        if has_nodriver:
+            try:
+                async def callback(page):
+                    while not await page.evaluate('document.querySelector(\'textarea[data-testid="textbox"]\')'):
+                        await asyncio.sleep(1)
+                args = await get_args_from_nodriver(cls.url, proxy=proxy, callback=callback)
+            except (RuntimeError, FileNotFoundError) as e:
+                debug.log(f"Nodriver is not available:", e)
+                args = {"headers": DEFAULT_HEADERS.copy(), "cookies": {}, "impersonate": "chrome"}
+        else:
+            args = {"headers": DEFAULT_HEADERS.copy(), "cookies": {}, "impersonate": "chrome"}
+        args["headers"].update({
+            "content-type": "application/json",
+            "accept": "application/json",
+            "referer": f"{cls.url}/",
+            "origin": cls.url,
+        })
+        yield AuthResult(**args)
+
+    @classmethod
+    def get_models(cls) -> list[str]:
+        LegacyLMArena.get_models()
+        cls.models = LegacyLMArena.models
+        cls.model_aliases = LegacyLMArena.model_aliases
+        cls.vision_models = LegacyLMArena.vision_models
         return cls.models
 
     @classmethod
@@ -122,11 +95,11 @@ class HarProvider(AsyncGeneratorProvider, ProviderModelMixin):
         return first_payload, second_payload, third_payload
 
     @classmethod
-    async def create_async_generator(
+    async def create_authed(
         cls,
         model: str,
         messages: Messages,
-        proxy: str = None,
+        auth_result: AuthResult,
         media: MediaListType = None,
         max_tokens: int = 2048,
         temperature: float = 0.7,
@@ -158,7 +131,7 @@ class HarProvider(AsyncGeneratorProvider, ProviderModelMixin):
         if isinstance(model, list):
             model = random.choice(model)
         prompt = get_last_user_message(messages)
-        async with StreamSession(impersonate="chrome") as session:
+        async with StreamSession(**auth_result.get_dict()) as session:
             if conversation is None:
                 conversation = JsonConversation(session_hash=str(uuid.uuid4()).replace("-", ""))
                 media = list(merge_media(media, messages))
@@ -197,28 +170,24 @@ class HarProvider(AsyncGeneratorProvider, ProviderModelMixin):
                                 postData = postData.replace("__MODEL__", model)
                         request_url = request_url.replace("__SESSION__", conversation.session_hash)
                         method = v['request']['method'].lower()
-                        async with getattr(session, method)(request_url, data=postData, headers={**get_headers(v), **DEFAULT_HEADERS}, proxy=proxy) as response:
+                        async with getattr(session, method)(request_url, data=postData) as response:
                             await raise_for_status(response)
                             async for chunk in read_response(response):
                                 yield chunk
                 yield conversation
             else:
                 first_payload, second_payload, third_payload = cls._build_second_payloads(model, conversation.session_hash, prompt, max_tokens, temperature, top_p)
-                headers = {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                }
                 # POST 1
-                async with session.post(f"{cls.url}{cls.api_endpoint}", json=first_payload, proxy=proxy, headers=headers) as response:
+                async with session.post(f"{cls.url}{cls.api_endpoint}", json=first_payload) as response:
                     await raise_for_status(response)
                 # POST 2
-                async with session.post(f"{cls.url}{cls.api_endpoint}", json=second_payload, proxy=proxy, headers=headers) as response:
+                async with session.post(f"{cls.url}{cls.api_endpoint}", json=second_payload) as response:
                     await raise_for_status(response)
                 # POST 3
-                async with session.post(f"{cls.url}{cls.api_endpoint}", json=third_payload, proxy=proxy, headers=headers) as response:
+                async with session.post(f"{cls.url}{cls.api_endpoint}", json=third_payload) as response:
                     await raise_for_status(response)
                 stream_url = f"{cls.url}/queue/data?session_hash={conversation.session_hash}"
-                async with session.get(stream_url, headers={"Accept": "text/event-stream"}, proxy=proxy) as response:
+                async with session.get(stream_url, headers={"Accept": "text/event-stream"}) as response:
                     await raise_for_status(response)
                     async for chunk in read_response(response):
                         yield chunk

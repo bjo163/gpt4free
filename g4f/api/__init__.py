@@ -7,13 +7,15 @@ import secrets
 import os
 import re
 import shutil
+import time
 from email.utils import formatdate
 import os.path
 import hashlib
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 from urllib.parse import quote_plus
-from fastapi import FastAPI, Response, Request, UploadFile, Form, Depends
+from fastapi import FastAPI, Response, Request, UploadFile, Form, Depends, Header
 from fastapi.responses import StreamingResponse, RedirectResponse, HTMLResponse, JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.security import APIKeyHeader
@@ -80,6 +82,12 @@ from .stubs import (
 )
 from g4f import debug
 
+try:
+    from g4f.gui.server.crypto import create_or_read_keys, decrypt_data, get_session_key
+    has_crypto = True
+except ImportError:
+    has_crypto = False
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 1337
@@ -108,10 +116,11 @@ def create_app():
     # Add CORS middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=".*",
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
 
     api = Api(app)
@@ -181,6 +190,15 @@ class AppConfig:
         for key, value in data.items():
             setattr(cls, key, value)
 
+def update_headers(request: Request, user: str) -> Request:
+    new_headers = request.headers.mutablecopy()
+    del new_headers["Authorization"]
+    if user:
+        new_headers["x-user"] = user
+    request.scope["headers"] = new_headers.raw
+    delattr(request, "_headers")
+    return request
+
 class Api:
     def __init__(self, app: FastAPI) -> None:
         self.app = app
@@ -208,34 +226,59 @@ class Api:
     def register_authorization(self):
         if AppConfig.g4f_api_key:
             print(f"Register authentication key: {''.join(['*' for _ in range(len(AppConfig.g4f_api_key))])}")
+        if has_crypto:
+            private_key, _ = create_or_read_keys()
+            session_key = get_session_key()
         @self.app.middleware("http")
         async def authorization(request: Request, call_next):
-            if AppConfig.g4f_api_key is not None or AppConfig.demo:
+            user = None
+            if request.method != "OPTIONS" and AppConfig.g4f_api_key is not None or AppConfig.demo:
                 try:
                     user_g4f_api_key = await self.get_g4f_api_key(request)
                 except HTTPException:
                     user_g4f_api_key = await self.security(request)
                     if hasattr(user_g4f_api_key, "credentials"):
                         user_g4f_api_key = user_g4f_api_key.credentials
+                if AppConfig.g4f_api_key is None or not secrets.compare_digest(AppConfig.g4f_api_key, user_g4f_api_key):
+                    if has_crypto and user_g4f_api_key:
+                        try:
+                            expires, user = decrypt_data(private_key, user_g4f_api_key).split(":", 1)
+                        except:
+                            try:
+                                data = json.loads(decrypt_data(session_key, user_g4f_api_key))
+                                expires = int(decrypt_data(private_key, data["data"])) + 86400
+                                user = data.get("user", user)
+                            except:
+                                return ErrorResponse.from_message(f"Invalid G4F API key", HTTP_401_UNAUTHORIZED)
+                        expires = int(expires) - int(time.time())
+                        debug.log(f"User: '{user}' G4F API key expires in {expires} seconds")
+                        if expires < 0:
+                            return ErrorResponse.from_message("G4F API key expired", HTTP_401_UNAUTHORIZED)
+                else:
+                    user = "admin"
                 path = request.url.path
                 if path.startswith("/v1") or path.startswith("/api/") or (AppConfig.demo and path == '/backend-api/v2/upload_cookies'):
-                    if user_g4f_api_key is None:
-                        return ErrorResponse.from_message("G4F API key required", HTTP_401_UNAUTHORIZED)
-                    if AppConfig.g4f_api_key is None or not secrets.compare_digest(AppConfig.g4f_api_key, user_g4f_api_key):
-                        return ErrorResponse.from_message("Invalid G4F API key", HTTP_403_FORBIDDEN)
+                    if request.method != "OPTIONS":
+                        if user_g4f_api_key is None:
+                            return ErrorResponse.from_message("G4F API key required", HTTP_401_UNAUTHORIZED)
+                        if AppConfig.g4f_api_key is None and user is None:
+                            return ErrorResponse.from_message("Invalid G4F API key", HTTP_403_FORBIDDEN)
                 elif not AppConfig.demo and not path.startswith("/images/") and not path.startswith("/media/"):
                     if user_g4f_api_key is not None:
-                        if not secrets.compare_digest(AppConfig.g4f_api_key, user_g4f_api_key):
+                        if user is None:
                             return ErrorResponse.from_message("Invalid G4F API key", HTTP_403_FORBIDDEN)
                     elif path.startswith("/backend-api/") or path.startswith("/chat/") and path != "/chat/":
                         try:
-                            username = await self.get_username(request)
+                            user = await self.get_username(request)
                         except HTTPException as e:
                             return ErrorResponse.from_message(e.detail, e.status_code, e.headers)
-                        response = await call_next(request)
-                        response.headers["x-user"] = username
-                        return response
-            return await call_next(request)
+                if user is None:
+                    ip = request.headers.get("X-Forwarded-For", "")[:4].strip(":.")
+                    user = request.headers.get("Cf-Ipcountry", "")
+                    user = f"{user}:{ip}" if user else ip
+                request = update_headers(request, user)
+            response = await call_next(request)
+            return response
 
     def register_validation_exception_handler(self):
         @self.app.exception_handler(RequestValidationError)
@@ -280,17 +323,19 @@ class Api:
                     "created": 0,
                     "owned_by": "",
                     "image": isinstance(model, g4f.models.ImageModel),
+                    "vision": isinstance(model, g4f.models.VisionModel),
                     "provider": False,
                 } for model in AnyProvider.get_models()] +
                 [{
                     "id": provider_name,
                     "object": "model",
                     "created": 0,
-                    "owned_by": getattr(provider, "label", None),
+                    "owned_by": getattr(provider, "label", ""),
                     "image": bool(getattr(provider, "image_models", False)),
+                    "vision": bool(getattr(provider, "vision_models", False)),
                     "provider": True,
                 } for provider_name, provider in Provider.ProviderUtils.convert.items()
-                    if provider.working and provider_name not in ("Custom", "Puter")
+                    if provider.working and provider_name not in ("Custom")
                 ]
             }
 
@@ -323,6 +368,10 @@ class Api:
             HTTP_200_OK: {"model": ModelResponseModel},
             HTTP_404_NOT_FOUND: {"model": ErrorResponseModel},
         })
+        @self.app.post("/v1/models/{model_name}", responses={
+            HTTP_200_OK: {"model": ModelResponseModel},
+            HTTP_404_NOT_FOUND: {"model": ErrorResponseModel},
+        })
         async def model_info(model_name: str) -> ModelResponseModel:
             if model_name in g4f.models.ModelUtils.convert:
                 model_info = g4f.models.ModelUtils.convert[model_name]
@@ -347,6 +396,7 @@ class Api:
             credentials: Annotated[HTTPAuthorizationCredentials, Depends(Api.security)] = None,
             provider: str = None,
             conversation_id: str = None,
+            x_user: Annotated[str | None, Header()] = None
         ):
             try:
                 if config.provider is None:
@@ -391,7 +441,8 @@ class Api:
                             **config.dict(exclude_none=True),
                             **{
                                 "conversation_id": None,
-                                "conversation": conversation
+                                "conversation": conversation,
+                                "user": x_user,
                             }
                         },
                         ignored=AppConfig.ignored_providers
@@ -629,7 +680,7 @@ class Api:
             HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponseModel},
         }
         @self.app.post("/v1/audio/speech", responses=responses)
-        @self.app.post("/api/{path_provider}/audio/speech", responses=responses)
+        @self.app.post("/api/{provider}/audio/speech", responses=responses)
         async def generate_speech(
             config: AudioSpeechConfig,
             provider: str = AppConfig.media_provider,
@@ -639,6 +690,7 @@ class Api:
             if credentials is not None and credentials.credentials != "secret":
                 api_key = credentials.credentials
             try:
+                audio = filter_none(voice=config.voice, format=config.response_format, language=config.language)
                 response = await self.client.chat.completions.create(
                     messages=[
                         {"role": "user", "content": f"{config.instrcutions} Text: {config.input}"}
@@ -646,10 +698,16 @@ class Api:
                     model=config.model,
                     provider=config.provider if provider is None else provider,
                     prompt=config.input,
-                    audio=filter_none(voice=config.voice, format=config.response_format, language=config.language),
                     api_key=api_key,
+                    download_media=config.download_media,
+                    **filter_none(
+                        audio=audio if audio else None,
+                    )
                 )
-                if isinstance(response.choices[0].message.content, AudioResponse):
+                if response.choices[0].message.audio is not None:
+                    response = base64.b64decode(response.choices[0].message.audio.data)
+                    return Response(response, media_type=f"audio/{config.response_format.replace('mp3', 'mpeg')}")
+                elif isinstance(response.choices[0].message.content, AudioResponse):
                     response = response.choices[0].message.content.data
                     response = response.replace("/media", get_media_dir())
                     def delete_file():
@@ -708,7 +766,7 @@ class Api:
                 if m:
                     return int(m.group(0))
                 else:
-                    raise ValueError("No timestamp found in filename")
+                    return 0
             target = os.path.join(get_media_dir(), os.path.basename(filename))
             if thumbnail and has_pillow:
                 thumbnail_dir = os.path.join(get_media_dir(), "thumbnails")

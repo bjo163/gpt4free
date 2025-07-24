@@ -20,7 +20,7 @@ from .asyncio import get_running_loop, to_sync_generator, to_async_iterator
 from .response import BaseConversation, AuthResult
 from .helper import concat_chunks
 from ..cookies import get_cookies_dir
-from ..errors import ModelNotFoundError, ResponseError, MissingAuthError, NoValidHarFileError, PaymentRequiredError
+from ..errors import ModelNotFoundError, ResponseError, MissingAuthError, NoValidHarFileError, PaymentRequiredError, CloudflareError
 
 SAFE_PARAMETERS = [
     "model", "messages", "stream", "timeout",
@@ -31,7 +31,7 @@ SAFE_PARAMETERS = [
     "frequency_penalty", "presence_penalty",
     "max_tokens", "stop",
     "api_key", "api_base", "seed", "width", "height",
-    "max_retries", "web_search",
+    "max_retries", "web_search", "cache",
     "guidance_scale", "num_inference_steps", "randomize_seed",
     "safe", "enhance", "private", "aspect_ratio", "n", "transparent"
 ]
@@ -72,7 +72,6 @@ class AbstractProvider(BaseProvider):
         cls,
         model: str,
         messages: Messages,
-        stream: bool,
         **kwargs
     ) -> CreateResult:
         """
@@ -238,7 +237,6 @@ class AsyncProvider(AbstractProvider):
         cls,
         model: str,
         messages: Messages,
-        stream: bool = False,
         **kwargs
     ) -> CreateResult:
         """
@@ -248,7 +246,6 @@ class AsyncProvider(AbstractProvider):
             cls (type): The class on which this method is called.
             model (str): The model to use for creation.
             messages (Messages): The messages to process.
-            stream (bool): Indicates whether to stream the results. Defaults to False.
             loop (AbstractEventLoop, optional): The event loop to use. Defaults to None.
             **kwargs: Additional keyword arguments.
 
@@ -292,7 +289,6 @@ class AsyncGeneratorProvider(AbstractProvider):
         cls,
         model: str,
         messages: Messages,
-        stream: bool = True,
         timeout: int = None,
         **kwargs
     ) -> CreateResult:
@@ -303,7 +299,6 @@ class AsyncGeneratorProvider(AbstractProvider):
             cls (type): The class on which this method is called.
             model (str): The model to use for creation.
             messages (Messages): The messages to process.
-            stream (bool): Indicates whether to stream the results. Defaults to True.
             loop (AbstractEventLoop, optional): The event loop to use. Defaults to None.
             **kwargs: Additional keyword arguments.
 
@@ -311,8 +306,7 @@ class AsyncGeneratorProvider(AbstractProvider):
             CreateResult: The result of the streaming completion creation.
         """
         return to_sync_generator(
-            cls.create_async_generator(model, messages, stream=stream, **kwargs),
-            stream=stream,
+            cls.create_async_generator(model, messages, **kwargs),
             timeout=timeout
         )
 
@@ -321,7 +315,6 @@ class AsyncGeneratorProvider(AbstractProvider):
     async def create_async_generator(
         model: str,
         messages: Messages,
-        stream: bool = True,
         **kwargs
     ) -> AsyncResult:
         """
@@ -330,7 +323,6 @@ class AsyncGeneratorProvider(AbstractProvider):
         Args:
             model (str): The model to use for creation.
             messages (Messages): The messages to process.
-            stream (bool): Indicates whether to stream the results. Defaults to True.
             **kwargs: Additional keyword arguments.
 
         Raises:
@@ -408,8 +400,8 @@ class RaiseErrorMixin():
                 raise ResponseError(data["error"]["message"])
             else:
                 raise ResponseError(data["error"])
-        elif ("choices" not in data or not data["choices"]) and "data" not in data:
-            raise ResponseError(f"Invalid response: {json.dumps(data)}")
+        #elif ("choices" not in data or not data["choices"]) and "data" not in data:
+        #    raise ResponseError(f"Invalid response: {json.dumps(data)}")
 
 class AuthFileMixin():
 
@@ -449,6 +441,22 @@ class AsyncAuthedProvider(AsyncGeneratorProvider, AuthFileMixin):
             cache_file.unlink()
 
     @classmethod
+    def get_auth_result(cls) -> AuthResult:
+        """
+        Retrieves the authentication result from cache.
+        """
+        cache_file = cls.get_cache_file()
+        if cache_file.exists():
+            try:
+                with cache_file.open("r") as f:
+                    return AuthResult(**json.load(f))
+            except json.JSONDecodeError:
+                cache_file.unlink()
+                raise MissingAuthError(f"Invalid auth file: {cache_file}")
+        else:
+            raise MissingAuthError
+
+    @classmethod
     def create_completion(
         cls,
         model: str,
@@ -458,17 +466,9 @@ class AsyncAuthedProvider(AsyncGeneratorProvider, AuthFileMixin):
         auth_result: AuthResult = None
         cache_file = cls.get_cache_file()
         try:
-            if cache_file.exists():
-                try:
-                    with cache_file.open("r") as f:
-                        auth_result = AuthResult(**json.load(f))
-                except json.JSONDecodeError:
-                    cache_file.unlink()
-                    raise MissingAuthError(f"Invalid auth file: {cache_file}")
-            else:
-                raise MissingAuthError
+            auth_result = cls.get_auth_result()
             yield from to_sync_generator(cls.create_authed(model, messages, auth_result, **kwargs))
-        except (MissingAuthError, NoValidHarFileError):
+        except (MissingAuthError, NoValidHarFileError, CloudflareError):
             response = cls.on_auth(**kwargs)
             for chunk in response:
                 if isinstance(chunk, AuthResult):
@@ -491,19 +491,11 @@ class AsyncAuthedProvider(AsyncGeneratorProvider, AuthFileMixin):
         auth_result: AuthResult = None
         cache_file = cls.get_cache_file()
         try:
-            if cache_file.exists():
-                try:
-                    with cache_file.open("r") as f:
-                        auth_result = AuthResult(**json.load(f))
-                except json.JSONDecodeError:
-                    cache_file.unlink()
-                    raise MissingAuthError(f"Invalid auth file: {cache_file}")
-            else:
-                raise MissingAuthError
+            auth_result = cls.get_auth_result()
             response = to_async_iterator(cls.create_authed(model, messages, **kwargs, auth_result=auth_result))
             async for chunk in response:
                 yield chunk
-        except (MissingAuthError, NoValidHarFileError):
+        except (MissingAuthError, NoValidHarFileError, CloudflareError):
             if cache_file.exists():
                 cache_file.unlink()
             response = cls.on_auth_async(**kwargs)

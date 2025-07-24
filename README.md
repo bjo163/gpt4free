@@ -1,22 +1,45 @@
+<img width="2048" height="512" alt="image" src="https://github.com/user-attachments/assets/5cb3fa91-0997-4671-8f7c-c5675d0467f2" />
+
 <a href="https://trendshift.io/repositories/1692" target="_blank"><img src="https://trendshift.io/api/badge/repositories/1692" alt="xtekky%2Fgpt4free | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 ---
 
 <p align="center">
   <span style="background: linear-gradient(45deg, #12c2e9, #c471ed, #f64f59); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-    <strong>Written by <a href="https://github.com/xtekky">@xtekky</a></strong>
+    <strong>Created by <a href="https://github.com/xtekky">@xtekky</a>, maintained by <a href="https://github.com/hlohaus">@hlohaus</a></strong>
   </span>
 </p>
-
+<p align="center">
+<span>Support the project on</span>
+      <a href="https://github.com/sponsors/hlohaus" target="_blank" rel="noopener noreferrer">
+        GitHub Sponsors
+      </a>
+      ❤️
+</p>
 <div id="top"></div>
 
 > [!IMPORTANT]
-> By using this repository or any code related to it, you agree to the [legal notice](LEGAL_NOTICE.md). The author is **not responsible for the usage of this repository nor endorses it**, nor is the author responsible for any copies, forks, re-uploads made by other users, or anything else related to GPT4Free. This is the author's only account and repository. To prevent impersonation or irresponsible actions, please comply with the GNU GPL license this Repository uses.
+> **GPT4Free Manifesto**
 
-> [!WARNING]
-> _"gpt4free"_ serves as a **PoC** (proof of concept), demonstrating the development of an API package with multi-provider requests, with features like timeouts, load balance and flow control.
+We live in a time where access to information and technology is increasingly restricted. Large corporations seek to monopolize control over their models, subjecting essential resources to strict terms of service and opaque practices. But we are here to stand against this tide.
+
+We declare:
+
+1. **Open Access:** Developing software and utilizing AI models is not illegal. It is a basic right that belongs to everyone. The notion that developing or using AI for purposes outside of what large companies dictate constitutes a legal violation is not only incorrect, but it is also an attack on creativity and innovation.
+
+2. **Collaboration Over Isolation:** Instead of monopolizing a platform through enclosure, we should connect various models together. Only through collaboration can we make the benefits of AI accessible to all and foster diversity and progress.
+
+3. **Against Privatization:** The privatization and isolation of models by large companies is not only dishonest but also unethical. It hinders progress and innovation while restricting developers' and users' opportunities. We rise against this form of market dominance.
+
+4. **For the Community:** Let’s build a community that promotes the free exchange of ideas and technologies. An effective and just system must reflect the diversity of voices and perspectives.
+
+5. **Unleashing Creativity:** We firmly believe that the true value of AI lies in its ability to solve problems, support, and inspire. Let us not be held back by restrictive practices. 
+
+In this spirit, we proclaim: The future of AI does not belong to a few giant corporations; it belongs to each and every one of us. Let’s work together to create a space where innovation can flourish, and where everyone has access to the tools they need to express themselves and grow.
 
 > [!NOTE]
+> Together, we will shape an open, inclusive, and more just digital world. 🤗
+
 > <sup><strong>Latest version:</strong></sup><br> [![PyPI version](https://img.shields.io/pypi/v/g4f?color=blue)](https://pypi.org/project/g4f) [![Docker version](https://img.shields.io/docker/v/hlohaus789/g4f?label=docker&color=blue)](https://hub.docker.com/r/hlohaus789/g4f)  
 > <sup><strong>Stats:</strong></sup><br> [![Downloads](https://static.pepy.tech/badge/g4f)](https://pepy.tech/project/g4f) [![Downloads](https://static.pepy.tech/badge/g4f/month)](https://pepy.tech/project/g4f)
 
@@ -133,7 +156,7 @@ docker run \
 To ensure the seamless operation of our application, please follow the instructions below. These steps are designed to guide you through the installation process on Windows operating systems.
 
 **Installation Steps:**
-1. **Download the Application**: Visit our [releases page](https://github.com/xtekky/gpt4free/releases/tag/0.4.2.0) and download the most recent version of the application, named `g4f.exe.zip`.
+1. **Download the Application**: Visit our [releases page](https://github.com/xtekky/gpt4free/releases/tag/0.5.7.0) and download the most recent version of the application, named `g4f.exe.zip`.
 2. **File Placement**: After downloading, locate the `.zip` file in your Downloads folder. Unpack it to a directory of your choice on your system, then execute the `g4f.exe` file to run the app.
 3. **Open GUI**: The app starts a web server with the GUI. Open your favorite browser and navigate to [http://localhost:8080/chat/](http://localhost:8080/chat/) to access the application interface.
 4. **Firewall Configuration (Hotfix)**: Upon installation, it may be necessary to adjust your Windows Firewall settings to allow the application to operate correctly. To do this, access your Windows Firewall settings and allow the application.
@@ -219,11 +242,11 @@ python -m g4f --port 8080 --debug
 
 ---
 
-### 🤖 Interference API
+### 🤖 Inference API
 
-The **Interference API** enables seamless integration with OpenAI's services through G4F, allowing you to deploy efficient AI solutions.
+The **Inference API** enables seamless integration with OpenAI's services through G4F, allowing you to deploy efficient AI solutions.
 
-- **Documentation**: [Interference API Docs](https://github.com/gpt4free/g4f.dev/blob/main/docs/interference-api.md)
+- **Documentation**: [Inference API Docs](https://github.com/gpt4free/g4f.dev/blob/main/docs/inference-api.md)
 - **Endpoint**: `http://localhost:1337/v1`
 - **Swagger UI**: Explore the OpenAPI documentation via Swagger UI at `http://localhost:1337/docs`
 - **Provider Selection**: [How to Specify a Provider?](https://github.com/gpt4free/g4f.dev/blob/main/docs/selecting_a_provider.md)

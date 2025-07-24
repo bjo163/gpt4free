@@ -7,6 +7,12 @@ from typing import Iterator
 from flask import send_from_directory, request
 from inspect import signature
 
+try:
+    from PIL import Image 
+    has_pillow = True
+except ImportError:
+    has_pillow = False
+
 from ...errors import VersionNotFoundError, MissingAuthError
 from ...image.copy_images import copy_media, ensure_media_dir, get_media_dir
 from ...image import get_width_height
@@ -94,7 +100,7 @@ class Api:
             "vision": getattr(provider, "default_vision_model", None) is not None,
             "nodriver": getattr(provider, "use_nodriver", False),
             "hf_space": getattr(provider, "hf_space", False),
-            "active_by_default": not provider.needs_auth if provider.active_by_default is None else provider.active_by_default,
+            "active_by_default": False if provider.active_by_default is None else provider.active_by_default,
             "auth": provider.needs_auth,
             "login_url": getattr(provider, "login_url", None),
         } for provider in Provider.__providers__ if provider.working and safe_get_models(provider)]
@@ -143,7 +149,6 @@ class Api:
             "model": model,
             "provider": provider,
             "messages": messages,
-            "stream": True,
             "ignore_stream": True,
             **kwargs
         }
@@ -156,12 +161,10 @@ class Api:
         if "user" not in kwargs:
             debug.log = decorated_log
         proxy = os.environ.get("G4F_PROXY")
-        provider = kwargs.get("provider")
+        provider = kwargs.pop("provider", None)
         try:
             model, provider_handler = get_model_and_provider(
                 kwargs.get("model"), provider,
-                stream=True,
-                ignore_stream=True,
                 has_images="media" in kwargs,
             )
             if "user" in kwargs:
@@ -179,7 +182,7 @@ class Api:
             if hasattr(provider_handler, "get_parameters"):
                 yield self._format_json("parameters", provider_handler.get_parameters(as_json=True))
         try:
-            result = iter_run_tools(ChatCompletion.create, **{**kwargs, "model": model, "provider": provider_handler, "download_media": download_media})
+            result = iter_run_tools(provider_handler, **{**kwargs, "model": model, "download_media": download_media})
             for chunk in result:
                 if isinstance(chunk, ProviderInfo):
                     yield self.handle_provider(chunk, model)
@@ -210,10 +213,22 @@ class Api:
                             proxy=proxy,
                             alt=chunk.alt,
                             tags=tags,
-                            add_url=f"width={width}&height={height}&",
+                            add_url=True,
                             timeout=kwargs.get("timeout"),
+                            return_target=True if isinstance(chunk, ImageResponse) else False,
                         ))
-                        media = ImageResponse(media, chunk.alt) if isinstance(chunk, ImageResponse) else VideoResponse(media, chunk.alt)
+                        options = {}
+                        target_paths, urls = get_target_paths_and_urls(media)
+                        if target_paths:
+                            if has_pillow:
+                                try:
+                                    with Image.open(target_paths[0]) as img:
+                                        width, height = img.size
+                                        options = {"width": width, "height": height}
+                                except Exception as e:
+                                    logger.exception(e)
+                            options["target_paths"] = target_paths
+                        media = ImageResponse(urls, chunk.alt, options) if isinstance(chunk, ImageResponse) else VideoResponse(media, chunk.alt)
                     yield self._format_json("content", str(media), urls=media.urls, alt=media.alt)
                 elif isinstance(chunk, SynthesizeData):
                     yield self._format_json("synthesize", chunk.get_dict())
@@ -229,10 +244,10 @@ class Api:
                     yield self._format_json("usage", chunk.get_dict())
                 elif isinstance(chunk, Reasoning):
                     yield self._format_json("reasoning", **chunk.get_dict())
-                elif isinstance(chunk, YouTube):
+                elif isinstance(chunk, YouTubeResponse):
                     yield self._format_json("content", chunk.to_string())
                 elif isinstance(chunk, AudioResponse):
-                    yield self._format_json("content", str(chunk))
+                    yield self._format_json("content", str(chunk), data=chunk.data)
                 elif isinstance(chunk, SuggestedFollowups):
                     yield self._format_json("suggestions", chunk.suggestions)
                 elif isinstance(chunk, DebugResponse):
@@ -287,3 +302,13 @@ class Api:
 
 def get_error_message(exception: Exception) -> str:
     return f"{type(exception).__name__}: {exception}"
+
+def get_target_paths_and_urls(media: list[Union[str, tuple[str, str]]]) -> tuple[list[str], list[str]]:
+    target_paths = []
+    urls = []
+    for item in media:
+        if isinstance(item, tuple):
+            item, target_path = item
+            target_paths.append(target_path)
+        urls.append(item)
+    return target_paths, urls

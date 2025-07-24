@@ -18,9 +18,10 @@ except ImportError:
     has_dsk = False
 
 class DeepSeekAPI(AsyncAuthedProvider, ProviderModelMixin):
+    label = "DeepSeek"
     url = "https://chat.deepseek.com"
     working = has_dsk
-    active_by_default = has_dsk
+    active_by_default = False
     needs_auth = True
     use_nodriver = True
     _access_token = None

@@ -9,13 +9,13 @@ from .AmigoChat         import AmigoChat
 from .Aura              import Aura
 from .ChatGpt           import ChatGpt
 from .Chatgpt4o         import Chatgpt4o
-from .Chatgpt4Online    import Chatgpt4Online
 from .ChatGptEs         import ChatGptEs
 from .ChatgptFree       import ChatgptFree
 from .ChatGptt          import ChatGptt
 from .DDG               import DDG
 from .Equing            import Equing
 from .FlowGpt           import FlowGpt
+from .FreeGpt           import FreeGpt
 from .FreeNetfly        import FreeNetfly
 from .FreeRouter        import FreeRouter
 from .Glider            import Glider
@@ -34,3 +34,5 @@ from .Theb              import Theb
 from .TypeGPT           import TypeGPT
 from .Upstage           import Upstage
 from .Vercel            import Vercel
+from .Websim            import Websim
+
