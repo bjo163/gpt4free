@@ -10,8 +10,10 @@ from .Custom            import Feature
 from .DeepInfra         import DeepInfra
 from .DeepSeek          import DeepSeek
 from .DeepSeekAPI       import DeepSeekAPI
+from .FenayAI           import FenayAI
 from .Gemini            import Gemini
 from .GeminiPro         import GeminiPro
+from .GeminiCLI         import GeminiCLI
 from .GigaChat          import GigaChat
 from .GithubCopilot     import GithubCopilot
 from .GithubCopilotAPI  import GithubCopilotAPI
@@ -22,10 +24,12 @@ from .LMArenaBeta       import LMArenaBeta
 from .MetaAI            import MetaAI
 from .MetaAIAccount     import MetaAIAccount
 from .MicrosoftDesigner import MicrosoftDesigner
+from .Nvidia            import Nvidia
 from .OpenaiAccount     import OpenaiAccount
 from .OpenaiAPI         import OpenaiAPI
 from .OpenaiChat        import OpenaiChat
 from .OpenRouter        import OpenRouter
+from .OpenRouter        import OpenRouterFree
 from .PerplexityApi     import PerplexityApi
 from .Pi                import Pi
 from .PuterJS           import PuterJS

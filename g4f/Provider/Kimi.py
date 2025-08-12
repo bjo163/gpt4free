@@ -5,9 +5,10 @@ from typing import AsyncIterator
 
 from .base_provider import AsyncAuthedProvider, ProviderModelMixin
 from ..providers.helper import get_last_user_message
-from ..requests import StreamSession, see_stream
+from ..requests import StreamSession, sse_stream, raise_for_status
 from ..providers.response import AuthResult, TitleGeneration, JsonConversation, FinishReason
 from ..typing import AsyncResult, Messages
+from ..errors import MissingAuthError
 
 class Kimi(AsyncAuthedProvider, ProviderModelMixin):
     url = "https://www.kimi.com"
@@ -15,6 +16,7 @@ class Kimi(AsyncAuthedProvider, ProviderModelMixin):
     active_by_default = True
     default_model = "kimi-k2"
     models = [default_model]
+    model_aliases = {"moonshotai/Kimi-K2-Instruct": default_model}
 
     @classmethod
     async def on_auth_async(cls, proxy: str = None, **kwargs) -> AsyncIterator:
@@ -29,8 +31,7 @@ class Kimi(AsyncAuthedProvider, ProviderModelMixin):
                     "x-traffic-id": device_id
                 }
             ) as response:
-                if response.status != 200:
-                    raise Exception("Failed to register device")
+                await raise_for_status(response)
             data = await response.json()
             if not data.get("access_token"):
                 raise Exception("No access token received")
@@ -50,7 +51,6 @@ class Kimi(AsyncAuthedProvider, ProviderModelMixin):
         web_search: bool = False,
         **kwargs
     ) -> AsyncResult:
-        pass
         async with StreamSession(
             proxy=proxy,
             impersonate="chrome",
@@ -67,14 +67,19 @@ class Kimi(AsyncAuthedProvider, ProviderModelMixin):
                     "source":"web",
                     "tags":[]
                 }) as response:
-                    if response.status != 200:
-                        raise Exception("Failed to create chat")
+                    try:
+                        await raise_for_status(response)
+                    except Exception as e:
+                        if "匿名聊天使用次数超过" in str(e):
+                            raise MissingAuthError("Anonymous chat usage limit exceeded")
+                        raise e
                     chat_data = await response.json()
                 conversation = JsonConversation(chat_id=chat_data.get("id"))
+                yield conversation
             data = {
                 "kimiplus_id": "kimi",
                 "extend": {"sidebar": True},
-                "model": model,
+                "model": "k2",
                 "use_search": web_search,
                 "messages": [
                     {
@@ -92,9 +97,8 @@ class Kimi(AsyncAuthedProvider, ProviderModelMixin):
                 f"https://www.kimi.com/api/chat/{conversation.chat_id}/completion/stream",
                 json=data
             ) as response:
-                if response.status != 200:
-                    raise Exception("Failed to start chat completion")
-                async for line in see_stream(response):
+                await raise_for_status(response)
+                async for line in sse_stream(response):
                     if line.get("event") == "cmpl":
                         yield line.get("text")
                     elif line.get("event") == "rename":

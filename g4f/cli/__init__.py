@@ -26,7 +26,7 @@ def get_api_parser():
     api_parser.add_argument("--g4f-api-key", type=str, default=None, help="Sets an authentication key for your API. (incompatible with --reload and --workers)")
     api_parser.add_argument("--ignored-providers", nargs="+", choices=[provider.__name__ for provider in Provider.__providers__ if provider.working],
                             default=[], help="List of providers to ignore when processing request. (incompatible with --reload and --workers)")
-    api_parser.add_argument("--cookie-browsers", nargs="+", choices=[browser.__name__ for browser in g4f.cookies.browsers],
+    api_parser.add_argument("--cookie-browsers", nargs="+", choices=[browser.__name__ for browser in g4f.cookies.BROWSERS],
                             default=[], help="List of browsers to access or retrieve cookies from. (incompatible with --reload and --workers)")
     api_parser.add_argument("--reload", action="store_true", help="Enable reloading.")
     api_parser.add_argument("--demo", action="store_true", help="Enable demo mode.")
@@ -53,7 +53,7 @@ def run_api_args(args):
         timeout=args.timeout,
     )
     if args.cookie_browsers:
-        g4f.cookies.browsers = [g4f.cookies[browser] for browser in args.cookie_browsers]
+        g4f.cookies.BROWSERS = [g4f.cookies[browser] for browser in args.cookie_browsers]
     run_api(
         bind=args.bind,
         port=args.port,
@@ -67,19 +67,22 @@ def run_api_args(args):
     )
 
 def main():
-    parser = argparse.ArgumentParser(description="Run gpt4free")
+    parser = argparse.ArgumentParser(description="Run gpt4free", exit_on_error=False)
     subparsers = parser.add_subparsers(dest="mode", help="Mode to run the g4f in.")
     subparsers.add_parser("api", parents=[get_api_parser()], add_help=False)
     subparsers.add_parser("gui", parents=[gui_parser()], add_help=False)
     subparsers.add_parser("client", parents=[get_parser()], add_help=False)
 
-    args = parser.parse_args()
-    if args.mode == "api":
-        run_api_args(args)
-    elif args.mode == "gui":
-        run_gui_args(args)
-    elif args.mode == "client":
-        run_client_args(args)
-    else:
-        parser.print_help()
-        exit(1)
+    try:
+        args = parser.parse_args()
+        if args.mode == "api":
+            run_api_args(args)
+        elif args.mode == "gui":
+            run_gui_args(args)
+        elif args.mode == "client":
+            run_client_args(args)
+        else:
+            parser.print_help()
+            exit(1)
+    except argparse.ArgumentError:
+        run_client_args(get_parser().parse_args())

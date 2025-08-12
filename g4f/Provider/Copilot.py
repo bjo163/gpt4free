@@ -46,12 +46,12 @@ class Copilot(AsyncAuthedProvider, ProviderModelMixin):
     active_by_default = True
     
     default_model = "Copilot"
-    models = [default_model, "Think Deeper"]
+    models = [default_model, "Think Deeper", "Smart (GPT-5)"]
     model_aliases = {
+        "o1": "Think Deeper",
         "gpt-4": default_model,
         "gpt-4o": default_model,
-        "o1": "Think Deeper",
-        "dall-e-3": default_model
+        "gpt-5": "GPT-5",
     }
 
     websocket_url = "wss://copilot.microsoft.com/c/api/chat?api-version=2"
@@ -173,6 +173,12 @@ class Copilot(AsyncAuthedProvider, ProviderModelMixin):
                 uploaded_images.append({"type":"image", "url": media})
 
             wss = await session.ws_connect(cls.websocket_url, timeout=3)
+            if "Think" in model:
+                mode = "reasoning"
+            elif model.startswith("gpt-5") or "GPT-5" in model:
+                mode = "smart"
+            else:
+                mode = "chat"
             await wss.send(json.dumps({
                 "event": "send",
                 "conversationId": conversation_id,
@@ -180,7 +186,7 @@ class Copilot(AsyncAuthedProvider, ProviderModelMixin):
                     "type": "text",
                     "text": prompt,
                 }],
-                "mode": "reasoning" if "Think" in model else "chat",
+                "mode": mode,
             }).encode(), CurlWsFlag.TEXT)
 
             done = False
@@ -217,6 +223,8 @@ class Copilot(AsyncAuthedProvider, ProviderModelMixin):
                 elif msg.get("event") == "partialImageGenerated":
                     mime_type = is_accepted_format(base64.b64decode(msg.get("content")[:12]))
                     yield ImagePreview(f"data:{mime_type};base64,{msg.get('content')}", image_prompt)
+                elif msg.get("event") == "chainOfThought":
+                    yield Reasoning(msg.get("text"))
                 elif msg.get("event") == "error":
                     raise RuntimeError(f"Error: {msg}")
                 elif msg.get("event") not in ["received", "startMessage", "partCompleted", "connected"]:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..providers.types          import BaseProvider, ProviderType
-from ..providers.retry_provider import RetryProvider, IterListProvider
+from ..providers.retry_provider import RetryProvider, IterListProvider, RotatedProvider
 from ..providers.base_provider  import AsyncProvider, AsyncGeneratorProvider
 from ..providers.create_images  import CreateImagesProvider
 from .. import debug
@@ -32,14 +32,19 @@ try:
 except ImportError as e:
     debug.error("Audio providers not loaded:", e)
 
-from .deprecated.ARTA      import ARTA
+from .deprecated.ARTA import ARTA
+from .deprecated.DuckDuckGo import DuckDuckGo
+from .deprecated.Free2GPT import Free2GPT
+
+from .ApiAirforce          import ApiAirforce
 from .Blackbox             import Blackbox
 from .Chatai               import Chatai
 from .Cloudflare           import Cloudflare
 from .Copilot              import Copilot
 from .DeepInfraChat        import DeepInfraChat
-from .DuckDuckGo           import DuckDuckGo
-from .Free2GPT             import Free2GPT
+from .EasyChat             import EasyChat
+from .GLM                  import GLM
+from .GptOss               import GptOss
 from .ImageLabs            import ImageLabs
 from .Kimi                 import Kimi
 from .LambdaChat           import LambdaChat
@@ -51,6 +56,7 @@ from .PerplexityLabs       import PerplexityLabs
 from .PollinationsAI       import PollinationsAI
 from .PollinationsImage    import PollinationsImage
 from .Startnest            import Startnest
+from .Qwen                 import Qwen
 from .TeachAnything        import TeachAnything
 from .WeWordle             import WeWordle
 from .YouTube              import YouTube

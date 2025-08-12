@@ -92,10 +92,11 @@ async def get_args_from_nodriver(
     wait_for: str = None,
     callback: callable = None,
     cookies: Cookies = None,
-    browser: Browser = None
+    browser: Browser = None,
+    user_data_dir: str = "nodriver"
 ) -> dict:
     if browser is None:
-        browser, stop_browser = await get_nodriver(proxy=proxy, timeout=timeout)
+        browser, stop_browser = await get_nodriver(proxy=proxy, timeout=timeout, user_data_dir=user_data_dir)
     else:
         def stop_browser():
             pass
@@ -155,7 +156,7 @@ async def get_nodriver(
 ) -> tuple[Browser, callable]:
     if not has_nodriver:
         raise MissingRequirementsError('Install "nodriver" and "platformdirs" package | pip install -U nodriver platformdirs')
-    user_data_dir = user_config_dir(f"g4f-{user_data_dir}") if has_platformdirs else None
+    user_data_dir = user_config_dir(f"g4f-{user_data_dir}") if user_data_dir and has_platformdirs else None
     if browser_executable_path is None:
         browser_executable_path = BrowserConfig.browser_executable_path
     if browser_executable_path is None:
@@ -166,41 +167,44 @@ async def get_nodriver(
             browser_executable_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
             if not os.path.exists(browser_executable_path):
                 browser_executable_path = None
+    debug.log(f"Browser executable path: {browser_executable_path}")
     lock_file = Path(get_cookies_dir()) / ".nodriver_is_open"
     lock_file.parent.mkdir(exist_ok=True)
     # Implement a short delay (milliseconds) to prevent race conditions.
-    await asyncio.sleep(0.1 * random.randint(0, 50))
-    if lock_file.exists():
-        opend_at = float(lock_file.read_text())
-        time_open = time.time() - opend_at
-        if timeout * 2 > time_open:
-            debug.log(f"Nodriver: Browser is already in use since {time_open} secs.")
-            debug.log("Lock file:", lock_file)
-            for idx in range(timeout):
-                if lock_file.exists():
-                    await asyncio.sleep(1)
-                else:
-                    break
-                if idx == timeout - 1:
-                    debug.log("Timeout reached, nodriver is still in use.")
-                    raise TimeoutError("Nodriver is already in use, please try again later.")
-        else:
-            debug.log(f"Nodriver: Browser was opened {time_open} secs ago, closing it.")
-            BrowserConfig.stop_browser()
-            lock_file.unlink(missing_ok=True)
-    lock_file.write_text(str(time.time()))
-    debug.log(f"Open nodriver with user_dir: {user_data_dir}")
+    if user_data_dir:
+        await asyncio.sleep(0.1 * random.randint(0, 50))
+        if lock_file.exists():
+            opend_at = float(lock_file.read_text())
+            time_open = time.time() - opend_at
+            if timeout * 2 > time_open:
+                debug.log(f"Nodriver: Browser is already in use since {time_open} secs.")
+                debug.log("Lock file:", lock_file)
+                for idx in range(timeout):
+                    if lock_file.exists():
+                        await asyncio.sleep(1)
+                    else:
+                        break
+                    if idx == timeout - 1:
+                        debug.log("Timeout reached, nodriver is still in use.")
+                        raise TimeoutError("Nodriver is already in use, please try again later.")
+            else:
+                debug.log(f"Nodriver: Browser was opened {time_open} secs ago, closing it.")
+                BrowserConfig.stop_browser()
+                lock_file.unlink(missing_ok=True)
+        lock_file.write_text(str(time.time()))
+        debug.log(f"Open nodriver with user_dir: {user_data_dir}")
     try:
         browser = await nodriver.start(
             user_data_dir=user_data_dir,
-            browser_args=None if proxy is None else [f"--proxy-server={proxy}"],
+            browser_args=["--no-sandbox"] if proxy is None else ["--no-sandbox", f"--proxy-server={proxy}"],
             browser_executable_path=browser_executable_path,
             **kwargs
         )
     except FileNotFoundError as e:
         raise MissingRequirementsError(e)
-    except:
+    except Exception as e:
         if util.get_registered_instances():
+            debug.error(e)
             browser = util.get_registered_instances().pop()
         else:
             raise
@@ -211,20 +215,27 @@ async def get_nodriver(
         except:
             pass
         finally:
-            lock_file.unlink(missing_ok=True)
+            if user_data_dir:
+                lock_file.unlink(missing_ok=True)
     BrowserConfig.stop_browser = on_stop
     return browser, on_stop
 
-async def see_stream(iter_lines: Iterator[bytes]) -> AsyncIterator[dict]:
+async def sse_stream(iter_lines: Iterator[bytes]) -> AsyncIterator[dict]:
     if hasattr(iter_lines, "content"):
         iter_lines = iter_lines.content
     elif hasattr(iter_lines, "iter_lines"):
         iter_lines = iter_lines.iter_lines()
     async for line in iter_lines:
         if line.startswith(b"data: "):
-            if line[6:].startswith(b"[DONE]"):
+            rest = line[6:].strip()
+            if not rest:
+                continue
+            if rest.startswith(b"[DONE]"):
                 break
-            yield json.loads(line[6:])
+            try:
+                yield json.loads(rest)
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid JSON data: {rest}")
 
 async def iter_lines(iter_response: AsyncIterator[bytes], delimiter=None):
     """

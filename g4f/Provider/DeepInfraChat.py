@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import random
+import requests
 from .template import OpenaiTemplate
-from ..errors import ModelNotFoundError
-from .. import debug
-
+from ..config import DEFAULT_MODEL
 
 class DeepInfraChat(OpenaiTemplate):
     parent = "DeepInfra"
@@ -14,74 +12,34 @@ class DeepInfraChat(OpenaiTemplate):
     api_endpoint = "https://api.deepinfra.com/v1/openai/chat/completions"
     working = True
 
-    default_model = 'deepseek-ai/DeepSeek-V3-0324'
-    default_vision_model = 'microsoft/Phi-4-multimodal-instruct'
+    default_model = DEFAULT_MODEL
+    default_vision_model = DEFAULT_MODEL
     vision_models = [
         default_vision_model,
-        'meta-llama/Llama-3.2-90B-Vision-Instruct'
+        'meta-llama/Llama-3.2-90B-Vision-Instruct',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
     ]
-    models = [
-        # cognitivecomputations
-        'cognitivecomputations/dolphin-2.6-mixtral-8x7b',
-        'cognitivecomputations/dolphin-2.9.1-llama-3-70b',
 
-        # deepinfra
-        'deepinfra/airoboros-70b',
+    @classmethod
+    def get_models(cls, **kwargs):
+        if not cls.models:
+            url = 'https://api.deepinfra.com/models/featured'
+            response = requests.get(url)
+            models = response.json()
+            
+            cls.models = []
+            cls.image_models = []
+            
+            for model in models:
+                if model["type"] == "text-generation":
+                    cls.models.append(model['model_name'])
+                elif model["reported_type"] == "text-to-image":
+                    cls.image_models.append(model['model_name'])
+            
+            cls.models.extend(cls.image_models)
 
-        # deepseek-ai
-        default_model,
-        'deepseek-ai/DeepSeek-V3-0324-Turbo',
-
-        'deepseek-ai/DeepSeek-R1-0528-Turbo',
-        'deepseek-ai/DeepSeek-R1-0528',
-        
-        'deepseek-ai/DeepSeek-Prover-V2-671B',
-        
-        'deepseek-ai/DeepSeek-V3',
-        
-        'deepseek-ai/DeepSeek-R1',
-        'deepseek-ai/DeepSeek-R1-Turbo',
-        'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
-        'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
-
-        # google (gemma)
-        'google/gemma-1.1-7b-it',
-        'google/gemma-2-9b-it',
-        'google/gemma-2-27b-it',
-        'google/gemma-3-4b-it',
-        'google/gemma-3-12b-it',
-        'google/gemma-3-27b-it',
-        
-        # google (codegemma)
-        'google/codegemma-7b-it',
-
-        # lizpreciatior
-        'lizpreciatior/lzlv_70b_fp16_hf',
-
-        # meta-llama
-        'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
-        'meta-llama/Llama-4-Scout-17B-16E-Instruct',
-        'meta-llama/Meta-Llama-3.1-8B-Instruct',
-        'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-        'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
-
-        # microsoft 
-        'microsoft/phi-4-reasoning-plus',
-        'microsoft/phi-4',  
-              
-        'microsoft/WizardLM-2-8x22B',
-        'microsoft/WizardLM-2-7B',
-
-        # mistralai
-        'mistralai/Mistral-Small-3.1-24B-Instruct-2503',
-
-        # Qwen
-        'Qwen/Qwen3-235B-A22B',
-        'Qwen/Qwen3-30B-A3B',
-        'Qwen/Qwen3-32B',
-        'Qwen/Qwen3-14B',
-        'Qwen/QwQ-32B',
-    ] + vision_models
+        return cls.models
 
     model_aliases = {
         # cognitivecomputations
@@ -125,7 +83,7 @@ class DeepInfraChat(OpenaiTemplate):
 
         # microsoft
         "phi-4": "microsoft/phi-4",
-        "phi-4-multimodal": default_vision_model,
+        "phi-4-multimodal": "microsoft/Phi-4-multimodal-instruct",
         "phi-4-reasoning-plus": "microsoft/phi-4-reasoning-plus",
         "wizardlm-2-7b": "microsoft/WizardLM-2-7B",
         "wizardlm-2-8x22b": "microsoft/WizardLM-2-8x22B",
@@ -140,28 +98,3 @@ class DeepInfraChat(OpenaiTemplate):
         "qwen-3-235b": "Qwen/Qwen3-235B-A22B",
         "qwq-32b": "Qwen/QwQ-32B",
     }
-
-    @classmethod
-    def get_model(cls, model: str, **kwargs) -> str:
-        """Get the internal model name from the user-provided model name."""
-        # kwargs can contain api_key, api_base, etc. but we don't need them for model selection
-        if not model:
-            return cls.default_model
-        
-        # Check if the model exists directly in our models list
-        if model in cls.models:
-            return model
-        
-        # Check if there's an alias for this model
-        if model in cls.model_aliases:
-            alias = cls.model_aliases[model]
-            # If the alias is a list, randomly select one of the options
-            if isinstance(alias, list):
-                import random
-                selected_model = random.choice(alias)
-                debug.log(f"DeepInfraChat: Selected model '{selected_model}' from alias '{model}'")
-                return selected_model
-            debug.log(f"DeepInfraChat: Using model '{alias}' for alias '{model}'")
-            return alias
-        
-        raise ModelNotFoundError(f"Model {model} not found")

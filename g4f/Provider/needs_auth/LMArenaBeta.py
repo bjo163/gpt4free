@@ -5,11 +5,18 @@ import uuid
 import json
 import asyncio
 import os
+import requests
+import json
+
+try:
+    import curl_cffi
+    has_curl_cffi = True
+except ImportError:
+    has_curl_cffi = False
 
 from ...typing import AsyncResult, Messages, MediaListType
-from ...requests import StreamSession, get_args_from_nodriver, raise_for_status, merge_cookies
-from ...requests import DEFAULT_HEADERS, has_nodriver
-from ...errors import ModelNotFoundError
+from ...requests import StreamSession, get_args_from_nodriver, raise_for_status, merge_cookies, has_nodriver
+from ...errors import ModelNotFoundError, CloudflareError, MissingAuthError
 from ...providers.response import FinishReason, Usage, JsonConversation, ImageResponse
 from ...tools.media import merge_media
 from ..base_provider import AsyncGeneratorProvider, ProviderModelMixin,AuthFileMixin
@@ -121,13 +128,46 @@ vision_models = [model["publicName"] for model in models if "image" in model["ca
 class LMArenaBeta(AsyncGeneratorProvider, ProviderModelMixin, AuthFileMixin):
     label = "LMArena (New)"
     url = "https://lmarena.ai"
+    share_url = None
     api_endpoint = "https://lmarena.ai/api/stream/create-evaluation"
     working = True
+    active_by_default = True
 
     default_model = list(text_models.keys())[0]
     models = list(text_models) + list(image_models)
-    image_models = list(image_models)
+    model_aliases = {
+        "flux-kontext": "flux-1-kontext-pro",
+    }
+    image_models = image_models
+    text_models = text_models
     vision_models = vision_models
+    looked = False
+    _models_loaded = False
+
+    @classmethod
+    def get_models(cls) -> list[str]:
+        if not cls._models_loaded and has_curl_cffi:
+            cache_file = cls.get_cache_file()
+            args = {}
+            if cache_file.exists():
+                with cache_file.open("r") as f:
+                    args = json.load(f)
+                response = curl_cffi.get(f"{cls.url}/?mode=direct", **args)
+                if response.ok:
+                    for line in response.text.splitlines():
+                        if "initialModels" in line:
+                            line = line.split("initialModels", maxsplit=1)[-1].split("initialModelAId")[0][3:-3].replace('\\', '')
+                            models = json.loads(line)
+                            cls.text_models = {model["publicName"]: model["id"] for model in models if "text" in model["capabilities"]["outputCapabilities"]}
+                            cls.image_models = {model["publicName"]: model["id"] for model in models if "image" in model["capabilities"]["outputCapabilities"]}
+                            cls.vision_models = [model["publicName"] for model in models if "image" in model["capabilities"]["inputCapabilities"]]
+                            cls.models = list(cls.text_models) + list(cls.image_models)
+                            cls.default_model = list(cls.text_models.keys())[0]
+                            cls._models_loaded = True
+                            break
+                else:
+                    debug.log(f"Failed to load models from {cls.url}: {response.status_code} {response.reason}")
+        return cls.models
 
     @classmethod
     async def create_async_generator(
@@ -140,112 +180,163 @@ class LMArenaBeta(AsyncGeneratorProvider, ProviderModelMixin, AuthFileMixin):
         timeout: int = None,
         **kwargs
     ) -> AsyncResult:
+        if cls.share_url is None:
+            cls.share_url = os.getenv("G4F_SHARE_URL")
+        prompt = get_last_user_message(messages)
         cache_file = cls.get_cache_file()
+        args = None
         if cache_file.exists() and cache_file.stat().st_mtime > time.time() - 60 * 30:
             with cache_file.open("r") as f:
                 args = json.load(f)
-        elif has_nodriver:
-            try:
+        for _ in range(2):
+            if args:
+                pass
+            elif has_nodriver or cls.share_url is None:
                 async def callback(page):
+                    button = await page.find("Accept Cookies")
+                    if button:
+                        await button.click()
+                    else:
+                        debug.log("No 'Accept Cookies' button found, skipping.")
+                    if not await page.evaluate('document.cookie.indexOf("arena-auth-prod-v1") >= 0'):
+                        debug.log("No authentication cookie found, trying to authenticate.")
+                        await page.select('#cf-turnstile', 300)
+                        debug.log("Found Element: 'cf-turnstile'")
+                        await asyncio.sleep(3)
+                        for _ in range(3):
+                            size = None
+                            for idx in range(15):
+                                size = await page.js_dumps('document.getElementById("cf-turnstile")?.getBoundingClientRect()||{}')
+                                debug.log("Found size:", {size.get("x"), size.get("y")})
+                                if "x" not in size:
+                                    break
+                                await page.flash_point(size.get("x") + idx * 2, size.get("y") + idx * 2)
+                                await page.mouse_click(size.get("x") + idx * 2, size.get("y") + idx * 2)
+                                await asyncio.sleep(1)
+                            if "x" not in size:
+                                break
+                        debug.log("Clicked on the turnstile.")
                     while not await page.evaluate('document.cookie.indexOf("arena-auth-prod-v1") >= 0'):
                         await asyncio.sleep(1)
                     while not await page.evaluate('document.querySelector(\'textarea\')'):
                         await asyncio.sleep(1)
                 args = await get_args_from_nodriver(cls.url, proxy=proxy, callback=callback)
-            except (RuntimeError, FileNotFoundError) as e:
-                debug.log(f"Nodriver is not available:", e)
-                args = {"headers": DEFAULT_HEADERS, "cookies": {}, "impersonate": "chrome"}
-        else:
-            args = {"headers": DEFAULT_HEADERS, "cookies": {}, "impersonate": "chrome"}
+                with cache_file.open("w") as f:
+                    json.dump(args, f)
+            elif not cls.looked:
+                cls.looked = True
+                try:
+                    debug.log("No cache file found, trying to fetch from share URL.")
+                    response = requests.get(cls.share_url, params={
+                        "prompt": prompt,
+                        "model": model,
+                        "provider": cls.__name__
+                    })
+                    raise_for_status(response)
+                    text, *args = response.text.split("\n" * 10 + "<!--", 1)
+                    if args:
+                        debug.log("Save args to cache file:", str(cache_file))
+                        with cache_file.open("w") as f:
+                            f.write(args[0].strip())
+                    yield text
+                finally:
+                    cls.looked = False
+                return
 
-        # Build the JSON payload
-        is_image_model = model in image_models
-        if not model:
-            model = cls.default_model
-        if model in image_models:
-            model = image_models[model]
-        elif model in text_models:
-            model = text_models[model]
-        elif model in cls.model_aliases:
-            model = cls.model_aliases[model]
-            debug.log(f"Using model alias: {model}")
-        else:
-            raise ModelNotFoundError(f"Model '{model}' is not supported by LMArena Beta.")
-        userMessageId = str(uuid.uuid4())
-        modelAMessageId = str(uuid.uuid4())
-        evaluationSessionId = str(uuid.uuid4())
-        prompt = get_last_user_message(messages)
-        data = {
-            "id": evaluationSessionId,
-            "mode": "direct",
-            "modelAId": model,
-            "userMessageId": userMessageId,
-            "modelAMessageId": modelAMessageId,
-            "messages": [
-                {
-                    "id": userMessageId,
-                    "role": "user",
-                    "content": prompt,
-                    "experimental_attachments": [
-                        {
-                            "name": name or os.path.basename(url),
-                            "contentType": get_content_type(url),
-                            "url": url
-                        }
-                        for url, name in list(merge_media(media, messages))
-                        if url.startswith("https://")
-                    ],
-                    "parentMessageIds": [] if conversation is None else conversation.message_ids,
-                    "participantPosition": "a",
-                    "modelId": None,
-                    "evaluationSessionId": evaluationSessionId,
-                    "status": "pending",
-                    "failureReason": None
-                },
-                {
-                    "id": modelAMessageId,
-                    "role": "assistant",
-                    "content": "",
-                    "experimental_attachments": [],
-                    "parentMessageIds": [userMessageId],
-                    "participantPosition": "a",
-                    "modelId": model,
-                    "evaluationSessionId": evaluationSessionId,
-                    "status": "pending",
-                    "failureReason": None
-                }
-            ],
-            "modality": "image" if is_image_model else "chat"
-        }
-        async with StreamSession(**args, timeout=timeout) as session:
-            async with session.post(
-                cls.api_endpoint,
-                json=data,
-                proxy=proxy
-            ) as response:
-                await raise_for_status(response)
-                args["cookies"] = merge_cookies(args["cookies"], response)
-                async for chunk in response.iter_lines():
-                    line = chunk.decode()
-                    if line.startswith("af:"):
-                        yield JsonConversation(message_ids=[modelAMessageId])
-                    elif line.startswith("a0:"):
-                        chunk = json.loads(line[3:])
-                        if chunk == "hasArenaError":
-                            raise ModelNotFoundError("LMArena Beta encountered an error: hasArenaError")
-                        yield chunk
-                    elif line.startswith("a2:"):
-                        yield ImageResponse([image.get("image") for image in json.loads(line[3:])], prompt)
-                    elif line.startswith("ad:"):
-                        finish = json.loads(line[3:])
-                        if "finishReason" in finish:
-                            yield FinishReason(finish["finishReason"])
-                        if "usage" in finish:
-                            yield Usage(**finish["usage"])
+            if not cls._models_loaded:
+                cls.get_models()
+            is_image_model = model in image_models
+            if not model:
+                model = cls.default_model
+            if model in cls.model_aliases:
+                model = cls.model_aliases[model]
+            if model in cls.text_models:
+                model_id = cls.text_models[model]
+            elif model in cls.image_models:
+                model_id = cls.image_models[model]
+            else:
+                raise ModelNotFoundError(f"Model '{model}' is not supported by LMArena Beta.")
 
-        # Save the args to cache file
-        with cache_file.open("w") as f:
-            json.dump(args, f)
+            userMessageId = str(uuid.uuid4())
+            modelAMessageId = str(uuid.uuid4())
+            evaluationSessionId = str(uuid.uuid4())
+            data = {
+                "id": evaluationSessionId,
+                "mode": "direct",
+                "modelAId": model_id,
+                "userMessageId": userMessageId,
+                "modelAMessageId": modelAMessageId,
+                "messages": [
+                    {
+                        "id": userMessageId,
+                        "role": "user",
+                        "content": prompt,
+                        "experimental_attachments": [
+                            {
+                                "name": name or os.path.basename(url),
+                                "contentType": get_content_type(url),
+                                "url": url
+                            }
+                            for url, name in list(merge_media(media, messages))
+                            if isinstance(url, str) and url.startswith("https://")
+                        ],
+                        "parentMessageIds": [] if conversation is None else conversation.message_ids,
+                        "participantPosition": "a",
+                        "modelId": None,
+                        "evaluationSessionId": evaluationSessionId,
+                        "status": "pending",
+                        "failureReason": None
+                    },
+                    {
+                        "id": modelAMessageId,
+                        "role": "assistant",
+                        "content": "",
+                        "experimental_attachments": [],
+                        "parentMessageIds": [userMessageId],
+                        "participantPosition": "a",
+                        "modelId": model,
+                        "evaluationSessionId": evaluationSessionId,
+                        "status": "pending",
+                        "failureReason": None
+                    }
+                ],
+                "modality": "image" if is_image_model else "chat"
+            }
+            try:
+                async with StreamSession(**args, timeout=timeout) as session:
+                    async with session.post(
+                        cls.api_endpoint,
+                        json=data,
+                        proxy=proxy
+                    ) as response:
+                        await raise_for_status(response)
+                        args["cookies"] = merge_cookies(args["cookies"], response)
+                        async for chunk in response.iter_lines():
+                            line = chunk.decode()
+                            if line.startswith("af:"):
+                                yield JsonConversation(message_ids=[modelAMessageId])
+                            elif line.startswith("a0:"):
+                                chunk = json.loads(line[3:])
+                                if chunk == "hasArenaError":
+                                    raise ModelNotFoundError("LMArena Beta encountered an error: hasArenaError")
+                                yield chunk
+                            elif line.startswith("a2:"):
+                                yield ImageResponse([image.get("image") for image in json.loads(line[3:])], prompt)
+                            elif line.startswith("ad:"):
+                                finish = json.loads(line[3:])
+                                if "finishReason" in finish:
+                                    yield FinishReason(finish["finishReason"])
+                                if "usage" in finish:
+                                    yield Usage(**finish["usage"])
+                break
+            except (CloudflareError, MissingAuthError):
+                args = None
+                debug.log(f"{cls.__name__}: Cloudflare error")
+                continue
+        if args and os.getenv("G4F_SHARE_AUTH"):
+            yield "\n" * 10
+            yield "<!--"
+            yield json.dumps(args)
 
 def get_content_type(url: str) -> str:
     if url.endswith(".webp"):
@@ -256,3 +347,16 @@ def get_content_type(url: str) -> str:
         return "image/jpeg"
     else:
         return "application/octet-stream"
+
+async def switch_to_frame(browser, frame_id):
+    """
+    change iframe
+    let iframe = document.querySelector("YOUR_IFRAME_SELECTOR")
+    let iframe_tab = iframe.contentWindow.document.body;
+    """
+    iframe_tab = next(
+        filter(
+        lambda x: str(x.target.target_id) == str(frame_id), browser.targets
+        )
+    )
+    return iframe_tab
