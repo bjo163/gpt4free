@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from .client import Client
-from .rocksoul_db import DBRouter, RocksoulDB, RouteCandidate
-from .rocksoul_policy import ErrorClass, ExecutionPolicy, RetryAction, RetryBudget
+from .rocksoul_db import DBRouter, RocksoulDB
+from .rocksoul_execution_store import ExecutionTraceStore
+from .rocksoul_policy import ExecutionPolicy, RetryAction, RetryBudget
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,7 @@ class ExecutionEngine:
     def __init__(self, db: RocksoulDB | None = None, client: Client | None = None) -> None:
         self.db = db or RocksoulDB()
         self.router = DBRouter(self.db)
+        self.trace = ExecutionTraceStore(self.db)
         self.client = client or Client()
 
     def _call(self, request: ExecutionRequest, provider: str) -> Any:
@@ -96,25 +98,33 @@ class ExecutionEngine:
         attempts: list[ExecutionAttempt] = []
         tried: set[str] = set()
         budget = RetryBudget(max_attempts=max(1, request.max_attempts))
+        self.trace.record_execution_run(
+            request.request_id, request.model, time.time(), None,
+            "running", None, 0, None,
+        )
         candidates = self.db.route_candidates(
             request.model,
             providers=request.providers or None,
             capabilities=request.requirements or None,
         )
         if not candidates:
+            self.trace.record_execution_run(
+                request.request_id, request.model, time.time(), time.time(),
+                "exhausted", None, 0, "no_candidate",
+            )
             return ExecutionResult(
                 request.request_id, False, request.model, None,
                 attempts=(), outcome="exhausted",
                 error_class="no_candidate", error="No eligible provider candidates",
             )
 
-        for attempt_no, candidate in enumerate(candidates, start=1):
-            if len(attempts) >= budget.max_attempts:
-                break
+        index = 0
+        while index < len(candidates) and len(attempts) < budget.max_attempts:
+            candidate = candidates[index]
+            index += 1
             if candidate.provider in tried:
                 continue
-            elapsed = time.monotonic() - started_total
-            if not budget.allows(len(attempts), elapsed, 0):
+            if not budget.allows(len(attempts), time.monotonic() - started_total, 0):
                 break
             tried.add(candidate.provider)
             started = time.time()
@@ -127,20 +137,18 @@ class ExecutionEngine:
                 if not valid:
                     raise ValueError("empty or invalid provider response")
                 attempt = ExecutionAttempt(
-                    attempt_no, candidate.provider, request.model, started, finished,
+                    len(attempts) + 1, candidate.provider, request.model, started, finished,
                     latency_ms, "success", response_valid=True,
                 )
                 attempts.append(attempt)
-                self.db.record_execution_attempt(
-                    request.request_id, attempt_no, candidate.provider, request.model,
+                self.trace.record_execution_attempt(
+                    request.request_id, attempt.attempt_no, candidate.provider, request.model,
                     started, finished, latency_ms, "success", None, None, True,
                 )
-                self.db.record_execution_run(
+                self.trace.record_execution_evidence(candidate.provider, request.model, True, latency_ms)
+                self.trace.record_execution_run(
                     request.request_id, request.model, started_total, time.time(),
                     "success", candidate.provider, len(attempts), None,
-                )
-                self.db.record_execution_evidence(
-                    candidate.provider, request.model, True, latency_ms,
                 )
                 return ExecutionResult(
                     request.request_id, True, request.model, candidate.provider,
@@ -152,20 +160,20 @@ class ExecutionEngine:
                 decision = ExecutionPolicy.decide(exc)
                 error_class = decision.error_class.value
                 attempt = ExecutionAttempt(
-                    attempt_no, candidate.provider, request.model, started, finished,
+                    len(attempts) + 1, candidate.provider, request.model, started, finished,
                     latency_ms, "failed", error_class, str(exc), False,
                 )
                 attempts.append(attempt)
-                self.db.record_execution_attempt(
-                    request.request_id, attempt_no, candidate.provider, request.model,
+                self.trace.record_execution_attempt(
+                    request.request_id, attempt.attempt_no, candidate.provider, request.model,
                     started, finished, latency_ms, "failed", error_class, str(exc), False,
                 )
-                self.db.record_execution_evidence(
+                self.trace.record_execution_evidence(
                     candidate.provider, request.model, False, latency_ms,
                     error_class=error_class, error=str(exc),
                 )
                 if decision.action is RetryAction.TERMINAL:
-                    self.db.record_execution_run(
+                    self.trace.record_execution_run(
                         request.request_id, request.model, started_total, time.time(),
                         "failed", candidate.provider, len(attempts), error_class,
                     )
@@ -180,10 +188,9 @@ class ExecutionEngine:
                         providers=request.providers or None,
                         capabilities=request.requirements or None,
                     )
-                continue
-
+                    index = 0
         last = attempts[-1] if attempts else None
-        self.db.record_execution_run(
+        self.trace.record_execution_run(
             request.request_id, request.model, started_total, time.time(),
             "exhausted", last.provider if last else None, len(attempts),
             last.error_class if last else None,
