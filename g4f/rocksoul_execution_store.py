@@ -2,9 +2,6 @@ from __future__ import annotations
 
 """Execution-specific persistence layered on the existing ROCKSOUL SQLite store."""
 
-import sqlite3
-import time
-from pathlib import Path
 from typing import Any
 
 from .rocksoul_db import RocksoulDB
@@ -138,7 +135,9 @@ class ExecutionTraceStore:
 
     def trace(self, request_id: str) -> dict[str, Any] | None:
         with self.db.connect() as conn:
-            run = conn.execute("SELECT * FROM execution_runs WHERE request_id=?", (request_id,)).fetchone()
+            run = conn.execute(
+                "SELECT * FROM execution_runs WHERE request_id=?", (request_id,)
+            ).fetchone()
             if run is None:
                 return None
             attempts = conn.execute(
@@ -151,11 +150,18 @@ class ExecutionTraceStore:
                 """,
                 (request_id,),
             ).fetchall()
+            selected_provider = None
+            if run["selected_provider_id"] is not None:
+                selected = conn.execute(
+                    "SELECT name FROM providers WHERE id=?",
+                    (run["selected_provider_id"],),
+                ).fetchone()
+                selected_provider = None if selected is None else selected[0]
         return {
             "request_id": request_id,
             "model": run["model"],
             "status": run["status"],
-            "selected_provider": None if run["selected_provider_id"] is None else self.db.connect().execute("SELECT name FROM providers WHERE id=?", (run["selected_provider_id"],)).fetchone()[0],
+            "selected_provider": selected_provider,
             "attempt_count": run["attempt_count"],
             "final_error_class": run["final_error_class"],
             "attempts": [dict(row) for row in attempts],
