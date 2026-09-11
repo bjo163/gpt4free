@@ -21,6 +21,7 @@ class ExecutionRequest:
     requirements: tuple[str, ...] = ()
     providers: tuple[str, ...] = ()
     max_attempts: int = 3
+    max_total_time: float = 90.0
     timeout: float = 30.0
     retry_base: float = 0.25
     retry_max: float = 30.0
@@ -101,7 +102,10 @@ class ExecutionEngine:
         started_wall = time.time()
         attempts: list[ExecutionAttempt] = []
         tried: set[str] = set()
-        budget = RetryBudget(max_attempts=max(1, request.max_attempts))
+        budget = RetryBudget(
+            max_attempts=max(1, request.max_attempts),
+            max_total_time=max(0.1, request.max_total_time),
+        )
         self.trace.record_execution_run(
             request.request_id, request.model, started_wall, None,
             "running", None, 0, None,
