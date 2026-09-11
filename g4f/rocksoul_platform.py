@@ -10,7 +10,6 @@ library beyond g4f itself.
 """
 
 import argparse
-import asyncio
 import hashlib
 import ipaddress
 import json
@@ -18,7 +17,6 @@ import os
 import socket
 import statistics
 import time
-import urllib.error
 import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -62,9 +60,7 @@ class CapabilitySet:
 
     def satisfies(self, required: Mapping[str, bool]) -> bool:
         for key, value in required.items():
-            if not value:
-                continue
-            if getattr(self, key, None) is not True:
+            if value and getattr(self, key, None) is not True:
                 return False
         return True
 
@@ -141,11 +137,12 @@ class HealthStore:
         self.store = JsonStore(path)
         self.records: dict[str, HealthRecord] = {}
         raw = self.store.load({})
-        for name, value in raw.items():
-            try:
-                self.records[name] = HealthRecord(**value)
-            except (TypeError, ValueError):
-                continue
+        if isinstance(raw, Mapping):
+            for name, value in raw.items():
+                try:
+                    self.records[name] = HealthRecord(**value)
+                except (TypeError, ValueError):
+                    continue
 
     def get(self, provider: str) -> HealthRecord:
         return self.records.setdefault(provider, HealthRecord(provider=provider))
@@ -245,7 +242,7 @@ class ProviderRegistry:
         except Exception:
             names = []
         for name in names:
-            registry.providers[name] = registry.inspect(name)
+            registry.providers[name] = ProviderRecord(name=name)
         registry.persist()
         return registry
 
@@ -265,7 +262,7 @@ class ProviderRegistry:
             models = getattr(provider, "models", [])
             if isinstance(models, str):
                 models = [models]
-            return ProviderRecord(
+            record = ProviderRecord(
                 name=name,
                 url=getattr(provider, "url", None),
                 working=getattr(provider, "working", None),
@@ -274,8 +271,10 @@ class ProviderRegistry:
                 capabilities=caps,
                 models=[str(x) for x in models if x],
             )
+            self.providers[name] = record
+            return record
         except Exception:
-            return ProviderRecord(name=name)
+            return self.providers.setdefault(name, ProviderRecord(name=name))
 
     def bind_model(self, model: str, provider: str, capabilities: CapabilitySet | None = None, verified: bool = False) -> None:
         item = ModelBinding(model, provider, capabilities or CapabilitySet(), verified, time.time() if verified else None)
@@ -305,7 +304,9 @@ class AdaptiveRouter:
         names = list(providers) if providers else list(self.registry.providers)
         scored: list[tuple[float, str]] = []
         for name in names:
-            spec = self.registry.providers.get(name) or self.registry.inspect(name)
+            spec = self.registry.providers.get(name)
+            if spec is None or (spec.url is None and spec.working is None):
+                spec = self.registry.inspect(name)
             if required and not spec.capabilities.satisfies(required):
                 continue
             health = self.health.get(name)
@@ -332,18 +333,13 @@ class AdaptiveRouter:
             started = time.perf_counter()
             try:
                 result = fn(provider)
-                latency = (time.perf_counter() - started) * 1000
-                self.health.record_success(provider, latency)
+                self.health.record_success(provider, (time.perf_counter() - started) * 1000)
                 self.circuit.success(provider)
                 return result
             except Exception as exc:
-                latency = (time.perf_counter() - started) * 1000
                 errors[provider] = exc
                 self.health.record_failure(provider, exc)
                 self.circuit.failure(provider)
-                category = classify_error(exc)
-                if category == ProviderCategory.AUTH:
-                    continue
         message = "; ".join(f"{p}: {type(e).__name__}: {e}" for p, e in errors.items())
         raise RuntimeError(f"Adaptive routing exhausted providers: {message}") from next(iter(errors.values()))
 
@@ -449,7 +445,7 @@ class MediaStore:
         self.root = root
         self.policy = policy or SecurityPolicy()
 
-    def store_bytes(self, data: bytes, suffix: str = ".bin", content_type: str | None = None) -> Path:
+    def store_bytes(self, data: bytes, suffix: str = ".bin") -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(data).hexdigest()
         safe_suffix = suffix if suffix.startswith(".") else "." + suffix
@@ -463,13 +459,9 @@ class MediaStore:
         request = urllib.request.Request(url, headers={"User-Agent": "ROCKSOUL-g4f-media/1"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = response.read()
-            content_type = response.headers.get("Content-Type", "")
-        extension = ".bin"
-        for candidate in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp3", ".wav", ".mp4"):
-            if candidate in content_type.lower():
-                extension = candidate
-                break
-        return self.store_bytes(data, extension, content_type)
+            content_type = response.headers.get("Content-Type", "").lower()
+        extension = next((x for x in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp3", ".wav", ".mp4") if x in content_type), ".bin")
+        return self.store_bytes(data, extension)
 
 
 @dataclass(slots=True)
@@ -491,6 +483,13 @@ class MeshRegistry:
     def __init__(self, path: Path = MESH_FILE) -> None:
         self.store = JsonStore(path)
         self.nodes: dict[str, MeshNode] = {}
+        raw = self.store.load({})
+        if isinstance(raw, Mapping):
+            for key, value in raw.items():
+                try:
+                    self.nodes[key] = MeshNode(**value)
+                except (TypeError, ValueError):
+                    continue
 
     def add(self, node: MeshNode) -> None:
         self.nodes[node.node_id] = node
@@ -501,8 +500,7 @@ class MeshRegistry:
         self.persist()
 
     def select(self, required: Mapping[str, bool] | None = None) -> MeshNode | None:
-        required = required or {}
-        candidates = [n for n in self.nodes.values() if n.capabilities.satisfies(required)]
+        candidates = [n for n in self.nodes.values() if n.capabilities.satisfies(required or {})]
         return max(candidates, key=lambda n: n.score, default=None)
 
     def persist(self) -> None:
@@ -522,7 +520,8 @@ class AgentRuntime:
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
         for _ in range(max_steps):
             response = self.model_fn(prompt, messages, [{"name": n} for n in self.tools])
-            calls = normalize_tool_calls(response.get("tool_calls") if isinstance(response, Mapping) else None)
+            raw_calls = response.get("tool_calls") if isinstance(response, Mapping) else None
+            calls = normalize_tool_calls(raw_calls)
             if not calls:
                 return response
             messages.append({"role": "assistant", "content": None, "tool_calls": [asdict(c) for c in calls]})
@@ -536,11 +535,7 @@ class AgentRuntime:
 
 
 class RocksoulClient:
-    """Adaptive wrapper around g4f.client.Client.
-
-    Pass explicit providers to keep routing deterministic and avoid probing/auth
-    attempts against every provider. The existing g4f client remains unchanged.
-    """
+    """Adaptive wrapper around g4f.client.Client."""
 
     def __init__(self, client: Any = None, registry: ProviderRegistry | None = None, health: HealthStore | None = None) -> None:
         if client is None:
@@ -552,19 +547,18 @@ class RocksoulClient:
 
     def complete(self, model: str, messages: Sequence[Mapping[str, Any]], providers: Sequence[str] | None = None, required: Mapping[str, bool] | None = None, **kwargs: Any) -> Any:
         def execute(provider_name: str) -> Any:
-            from .providers.service import get_provider
-            try:
-                provider = get_provider(provider_name)
-            except Exception:
-                from .client.service import convert_to_provider
-                provider = convert_to_provider(provider_name)
+            from .client.service import convert_to_provider
+            provider = convert_to_provider(provider_name)
             return self.client.chat.completions.create(messages=list(messages), model=model, provider=provider, **kwargs)
         return self.router.execute(model, execute, required, providers)
 
 
 def _provider_table(registry: ProviderRegistry, health: HealthStore) -> list[dict[str, Any]]:
     rows = []
-    for name, spec in sorted(registry.providers.items()):
+    for name in sorted(registry.providers):
+        spec = registry.providers[name]
+        if spec.url is None and spec.working is None:
+            spec = registry.inspect(name)
         h = health.get(name)
         rows.append({
             "provider": name,
