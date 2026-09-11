@@ -95,11 +95,12 @@ class ExecutionEngine:
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         started_total = time.monotonic()
+        started_wall = time.time()
         attempts: list[ExecutionAttempt] = []
         tried: set[str] = set()
         budget = RetryBudget(max_attempts=max(1, request.max_attempts))
         self.trace.record_execution_run(
-            request.request_id, request.model, time.time(), None,
+            request.request_id, request.model, started_wall, None,
             "running", None, 0, None,
         )
         candidates = self.db.route_candidates(
@@ -109,7 +110,7 @@ class ExecutionEngine:
         )
         if not candidates:
             self.trace.record_execution_run(
-                request.request_id, request.model, time.time(), time.time(),
+                request.request_id, request.model, started_wall, time.time(),
                 "exhausted", None, 0, "no_candidate",
             )
             return ExecutionResult(
@@ -147,7 +148,7 @@ class ExecutionEngine:
                 )
                 self.trace.record_execution_evidence(candidate.provider, request.model, True, latency_ms)
                 self.trace.record_execution_run(
-                    request.request_id, request.model, started_total, time.time(),
+                    request.request_id, request.model, started_wall, time.time(),
                     "success", candidate.provider, len(attempts), None,
                 )
                 return ExecutionResult(
@@ -174,7 +175,7 @@ class ExecutionEngine:
                 )
                 if decision.action is RetryAction.TERMINAL:
                     self.trace.record_execution_run(
-                        request.request_id, request.model, started_total, time.time(),
+                        request.request_id, request.model, started_wall, time.time(),
                         "failed", candidate.provider, len(attempts), error_class,
                     )
                     return ExecutionResult(
@@ -191,7 +192,7 @@ class ExecutionEngine:
                     index = 0
         last = attempts[-1] if attempts else None
         self.trace.record_execution_run(
-            request.request_id, request.model, started_total, time.time(),
+            request.request_id, request.model, started_wall, time.time(),
             "exhausted", last.provider if last else None, len(attempts),
             last.error_class if last else None,
         )
