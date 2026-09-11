@@ -46,7 +46,7 @@ class ResponseValidator:
         if value is None:
             return False
         if stream:
-            return True
+            return isinstance(value, Sequence) and len(value) > 0
         content = getattr(value, "content", None)
         if content is not None and str(content).strip():
             return True
@@ -78,7 +78,8 @@ class LiveProbe:
         timeout: float = 30.0,
         client_factory: Callable[[Any], Any] | None = None,
     ) -> ProbeResult:
-        del timeout  # Provider-level timeout policies are owned by g4f.
+        if probe_type not in {"smoke", "stream"}:
+            raise ValueError(f"Unsupported probe type: {probe_type}")
         started = time.perf_counter()
         ok = False
         valid = False
@@ -89,15 +90,17 @@ class LiveProbe:
             provider_handler = self._provider(provider)
             client = (client_factory or (lambda p: self._default_client(p)))(provider_handler)
             stream = probe_type == "stream"
+            request_timeout = max(1.0, float(timeout))
             result = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": "Reply with exactly: ROCKSOUL_PROBE_OK"}],
                 provider=provider_handler,
                 stream=stream,
+                timeout=request_timeout,
             )
             if stream:
                 chunks = list(result)
-                valid = bool(chunks)
+                valid = ResponseValidator.chat(chunks, stream=True)
                 ok = valid
             else:
                 valid = ResponseValidator.chat(result)
@@ -119,6 +122,8 @@ class LiveProbe:
             response_valid=valid,
         )
         self.db.bind_model(provider, model, verified=ok)
+        if ok:
+            self.db.set_capability(provider, "streaming" if stream else "text", True, True, True, model=model)
         return probe
 
     @staticmethod
@@ -133,13 +138,31 @@ class LiveProbe:
         model: str,
         concurrency: int = 4,
         probe_type: str = "smoke",
+        timeout: float = 30.0,
     ) -> list[ProbeResult]:
         workers = max(1, min(int(concurrency), len(providers) or 1))
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(self.probe, name, model, probe_type) for name in providers]
+            futures = [
+                executor.submit(self.probe, name, model, probe_type, timeout)
+                for name in providers
+            ]
             results: list[ProbeResult] = []
             for future in concurrent.futures.as_completed(futures):
-                results.append(future.result())
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    results.append(
+                        ProbeResult(
+                            provider="<worker>",
+                            model=model,
+                            probe_type=probe_type,
+                            ok=False,
+                            latency_ms=None,
+                            response_valid=False,
+                            error_class=type(exc).__name__,
+                            error=str(exc),
+                        )
+                    )
         return sorted(results, key=lambda item: item.provider.lower())
 
 
