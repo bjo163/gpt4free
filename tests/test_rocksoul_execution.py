@@ -69,6 +69,21 @@ class RocksoulExecutionTests(unittest.TestCase):
         decision = ExecutionPolicy.decide(RuntimeError("content blocked by safety policy"))
         self.assertEqual(decision.action, RetryAction.TERMINAL)
 
+    def test_backoff_is_bounded_and_timeout_is_immediate(self) -> None:
+        rate_limit = ExecutionPolicy.decide(RuntimeError("429 rate limit exceeded"))
+        self.assertEqual(ExecutionPolicy.backoff_seconds(rate_limit, 0, maximum=8.0), 8.0)
+        network = ExecutionPolicy.decide(ConnectionError("network down"))
+        self.assertEqual(ExecutionPolicy.backoff_seconds(network, 2, base=0.5, maximum=8.0), 2.0)
+        timeout = ExecutionPolicy.decide(TimeoutError("timed out"))
+        self.assertEqual(ExecutionPolicy.backoff_seconds(timeout, 2), 0.0)
+
+    def test_provider_enters_cooldown_after_failure_streak(self) -> None:
+        for _ in range(3):
+            self.db.record_probe("A", "execution", False, 5.0, error_class="network", error="down")
+        health = self.db.health("A")
+        self.assertGreater(health.cooldown_until, 0.0)
+        self.assertEqual(self.db.route_candidates("demo")[0].provider, "B")
+
     def test_request_identity_is_unique(self) -> None:
         a = ExecutionRequest(model="demo", messages=[])
         b = ExecutionRequest(model="demo", messages=[])
