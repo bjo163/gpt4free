@@ -1,7 +1,6 @@
 # ROCKSOUL Intelligence Plane
 
-ROCKSOUL uses SQLite as the canonical local source of truth for provider intelligence.
-The default database lives at `%LOCALAPPDATA%\ROCKSOUL\g4f\rocksoul.db`.
+ROCKSOUL uses SQLite as the canonical local source of truth for provider intelligence. The default database lives at `%LOCALAPPDATA%\ROCKSOUL\g4f\rocksoul.db`.
 
 ## Data model
 
@@ -37,20 +36,48 @@ uv run rocksoul probe-all --model gpt-4o-mini --concurrency 4 --timeout 30
 
 A successful smoke probe verifies a non-empty chat response. A stream probe consumes the complete stream and requires at least one chunk. Every probe persists latency, outcome, error classification, and model verification state to SQLite.
 
-## Routing
+## Capability verification
+
+Capability state is deliberately separated into `DECLARED`, `DETECTED`, and `VERIFIED`. Routing requires `VERIFIED` evidence when a capability is explicitly requested.
 
 ```powershell
-uv run rocksoul route gpt-4o
-uv run rocksoul route gpt-4o --verified-only
+uv run rocksoul verify Gemini --model gemini-2.5-flash --capability streaming
+uv run rocksoul verify Gemini --model gemini-2.5-flash --capability tools
+uv run rocksoul verify Gemini --model gemini-2.5-flash --capability structured_output
+uv run rocksoul verify Gemini --model gemini-2.5-flash --capability vision
+uv run rocksoul verify Gemini --model gemini-2.5-flash --capability image
 ```
 
-Only provider/model bindings known to the database participate in SQLite routing. A successful live probe upgrades that binding to verified. Health ranking is derived from probe history, while active/auth metadata contributes bounded routing bonuses and penalties.
+Verification makes real requests only when explicitly invoked. A failed verification never upgrades the capability to verified.
+
+## Explainable routing
+
+```powershell
+uv run rocksoul route-explain gpt-4o-mini --tools --streaming
+uv run rocksoul route gpt-4o-mini --capability tools --capability streaming
+uv run rocksoul route gpt-4o-mini --verified-only
+```
+
+The explainable route path records the selected provider, candidate scores, capability states, model verification, health evidence, and latency evidence. A provider with only declared/detected capability evidence is rejected when that capability is required.
+
+## Quarantine and recovery
+
+Three consecutive recent probe failures put a provider into a computed cooldown/quarantine state. Recovery is evidence-driven: a provider is re-admitted only after a successful smoke probe.
+
+```powershell
+uv run rocksoul recover
+uv run rocksoul recover --provider Gemini --model gpt-4o-mini --timeout 20
+```
+
+No separate mutable quarantine registry is required; the state is derived from probe history and persisted health snapshots.
 
 ## CI boundary
 
 The repository uses GitHub-hosted runners for normal CI. CI runs dependency resolution, import smoke tests, unit tests, CLI read-only smoke tests, and package builds on Ubuntu and Windows.
 
-Live provider probing is deliberately excluded from default CI because provider availability, credentials, quotas, and external service behavior are not deterministic. Live probing is an explicit operator action or a future scheduled job with its own policy.
+Live provider probing is deliberately excluded from default CI because provider availability, credentials, quotas, and external service behavior are not deterministic.
+
+A separate scheduled/manual workflow runs bounded smoke probes on GitHub-hosted infrastructure. It is an operational intelligence job, not a merge gate; failures indicate provider health drift rather than repository build failure.
 
 ## State locations
 
