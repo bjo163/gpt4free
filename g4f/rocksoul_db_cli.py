@@ -10,6 +10,8 @@ from typing import Any
 from .rocksoul_db import RocksoulDB, DB_PATH
 from .rocksoul_probe import LiveProbe, default_probe_model, result_summary
 from .rocksoul_intelligence import CAPABILITIES, CapabilityRequirement, CapabilityVerifier, ExplainableRouter, RecoveryManager
+from .rocksoul_execution import ExecutionEngine, ExecutionRequest
+from .rocksoul_execution_store import ExecutionTraceStore
 
 
 def inspect_provider(db: RocksoulDB, name: str) -> dict[str, Any]:
@@ -88,6 +90,8 @@ def main() -> None:
     verify = sub.add_parser("verify"); verify.add_argument("provider"); verify.add_argument("--model", default=None); verify.add_argument("--capability", choices=list(CAPABILITIES), action="append"); verify.add_argument("--timeout", type=float, default=30.0)
     probe_all = sub.add_parser("probe-all"); probe_all.add_argument("--model", default=None); probe_all.add_argument("--type", choices=["smoke", "stream"], default="smoke"); probe_all.add_argument("--concurrency", type=int, default=4); probe_all.add_argument("--timeout", type=float, default=30.0)
     recover = sub.add_parser("recover"); recover.add_argument("--provider", action="append"); recover.add_argument("--model", default=default_probe_model()); recover.add_argument("--timeout", type=float, default=30.0)
+    execute = sub.add_parser("execute"); execute.add_argument("model"); execute.add_argument("message"); execute.add_argument("--provider", action="append"); execute.add_argument("--capability", action="append"); execute.add_argument("--max-attempts", type=int, default=3); execute.add_argument("--timeout", type=float, default=30.0); execute.add_argument("--total-time", type=float, default=90.0)
+    trace = sub.add_parser("trace"); trace.add_argument("request_id")
     sub.add_parser("status")
     args = parser.parse_args(); db = RocksoulDB()
 
@@ -129,10 +133,24 @@ def main() -> None:
         print(json.dumps(result_summary(results), indent=2))
     elif args.command == "recover":
         print(json.dumps(RecoveryManager(db).recover(args.provider, args.model, args.timeout), indent=2))
+    elif args.command == "execute":
+        request = ExecutionRequest(
+            model=args.model,
+            messages=({"role": "user", "content": args.message},),
+            requirements=tuple(args.capability or ()),
+            providers=tuple(args.provider or ()),
+            max_attempts=max(1, args.max_attempts),
+            timeout=max(0.1, args.timeout),
+            max_total_time=max(0.1, args.total_time),
+        )
+        result = ExecutionEngine(db=db).execute(request)
+        print(json.dumps({"request_id": result.request_id, "ok": result.ok, "model": result.model, "provider": result.provider, "outcome": result.outcome, "error_class": result.error_class, "error": result.error, "attempts": [item.__dict__ for item in result.attempts]}, indent=2, default=str))
+    elif args.command == "trace":
+        print(json.dumps(ExecutionTraceStore(db).trace(args.request_id) or {"request_id": args.request_id, "found": False}, indent=2))
     elif args.command == "status":
         with db.connect() as conn:
             counts = {key: int(conn.execute(query).fetchone()[0]) for key, query in {
-                "providers": "SELECT COUNT(*) FROM providers", "models": "SELECT COUNT(*) FROM models", "provider_models": "SELECT COUNT(*) FROM provider_models", "capabilities": "SELECT COUNT(*) FROM capabilities", "probes": "SELECT COUNT(*) FROM probe_runs", "route_decisions": "SELECT COUNT(*) FROM route_decisions"}.items()}
+                "providers": "SELECT COUNT(*) FROM providers", "models": "SELECT COUNT(*) FROM models", "provider_models": "SELECT COUNT(*) FROM provider_models", "capabilities": "SELECT COUNT(*) FROM capabilities", "probes": "SELECT COUNT(*) FROM probe_runs", "route_decisions": "SELECT COUNT(*) FROM route_decisions", "execution_runs": "SELECT COUNT(*) FROM execution_runs", "execution_attempts": "SELECT COUNT(*) FROM execution_attempts"}.items()}
         print(json.dumps({"db": str(DB_PATH), **counts}, indent=2))
 
 
