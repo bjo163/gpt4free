@@ -95,6 +95,7 @@ def main() -> None:
     trace = sub.add_parser("trace"); trace.add_argument("request_id")
     sub.add_parser("status")
     args = parser.parse_args(); db = RocksoulDB()
+    execution_store = ExecutionTraceStore(db)
 
     if args.command == "discover":
         print(json.dumps(discover_all(db), indent=2))
@@ -147,7 +148,7 @@ def main() -> None:
         result = ExecutionEngine(db=db).execute(request)
         print(json.dumps({"request_id": result.request_id, "ok": result.ok, "model": result.model, "provider": result.provider, "outcome": result.outcome, "error_class": result.error_class, "error": result.error, "attempts": [asdict(item) for item in result.attempts]}, indent=2, default=str))
     elif args.command == "trace":
-        print(json.dumps(ExecutionTraceStore(db).trace(args.request_id) or {"request_id": args.request_id, "found": False}, indent=2))
+        print(json.dumps(execution_store.trace(args.request_id) or {"request_id": args.request_id, "found": False}, indent=2))
     elif args.command == "status":
         with db.connect() as conn:
             counts = {key: int(conn.execute(query).fetchone()[0]) for key, query in {
