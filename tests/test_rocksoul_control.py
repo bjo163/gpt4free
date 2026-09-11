@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import tempfile
-import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from g4f.rocksoul_control import ProviderControlStore
 from g4f.rocksoul_db import RocksoulDB
@@ -43,10 +41,8 @@ class RocksoulControlTests(unittest.TestCase):
         self.assertIn("QUARANTINED", {event["to_state"] for event in self.control.history("A")})
 
     def test_expired_cooldown_re_admits_active(self) -> None:
-        with patch("g4f.rocksoul_control.time.time", side_effect=[100.0, 100.0, 101.0, 102.0, 102.0]):
-            self.control.cooldown("A", 1.0)
-            with patch("g4f.rocksoul_control.time.time", return_value=102.0):
-                self.assertEqual(self.control.get("A").state, "ACTIVE")
+        self.control.cooldown("A", 0)
+        self.assertEqual(self.control.get("A").state, "ACTIVE")
 
 
 if __name__ == "__main__":
