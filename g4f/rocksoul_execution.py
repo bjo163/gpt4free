@@ -22,6 +22,9 @@ class ExecutionRequest:
     providers: tuple[str, ...] = ()
     max_attempts: int = 3
     timeout: float = 30.0
+    retry_base: float = 0.25
+    retry_max: float = 30.0
+    retry_jitter: float = 0.0
     stream: bool = False
     kwargs: dict[str, Any] = field(default_factory=dict)
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -183,6 +186,20 @@ class ExecutionEngine:
                         attempts=tuple(attempts), outcome="failed",
                         error_class=error_class, error=str(exc),
                     )
+                if len(attempts) >= budget.max_attempts or time.monotonic() - started_total >= budget.max_total_time:
+                    break
+                delay = ExecutionPolicy.backoff_seconds(
+                    decision,
+                    len(attempts) - 1,
+                    base=request.retry_base,
+                    maximum=request.retry_max,
+                    jitter=request.retry_jitter,
+                )
+                if delay > 0:
+                    remaining = budget.max_total_time - (time.monotonic() - started_total)
+                    if remaining <= 0:
+                        break
+                    time.sleep(min(delay, remaining))
                 if decision.action is RetryAction.RECOMPUTE_CANDIDATES:
                     candidates = self.db.route_candidates(
                         request.model,
