@@ -55,6 +55,19 @@ class RocksoulExecutionTests(unittest.TestCase):
         self.assertEqual(trace["attempt_count"], 2)
         self.assertEqual([row["status"] for row in trace["attempts"]], ["failed", "success"])
 
+    def test_execution_persists_route_decision(self) -> None:
+        engine = ExecutionEngine(self.db, FakeClient())
+        result = engine.execute(ExecutionRequest(model="demo", messages="hello"))
+        self.assertTrue(result.ok)
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT selected_provider_id, candidates_json, reason_json FROM route_decisions ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["selected_provider_id"], self.db.provider_id("A"))
+        self.assertIn("A", row["candidates_json"])
+        self.assertIn("health_score", row["reason_json"])
+
     def test_success_stops_after_first_provider(self) -> None:
         client = FakeClient()
         engine = ExecutionEngine(self.db, client)
