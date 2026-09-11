@@ -7,7 +7,33 @@ authors = [
     { name = "bjo163", email = "bjo163@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "requests",
+    "pycryptodome",
+    "curl_cffi>=0.6.2",
+    "aiohttp",
+    "certifi",
+    "browser_cookie3",
+    "nest-asyncio2",
+    "werkzeug",
+    "pillow",
+    "platformdirs",
+    "fastapi",
+    "uvicorn",
+    "flask[async]",
+    "brotli",
+    "beautifulsoup4",
+    "setuptools",
+    "python-multipart",
+    "a2wsgi",
+    "python-dotenv",
+    "ddgs",
+    "numpy",
+    "PyYAML",
+    "websocket-client",
+    "pystray",
+    "cryptography",
+]
 
 [project.scripts]
 gpt4free = "gpt4free:main"
