@@ -50,8 +50,8 @@ class RocksoulPlatformTests(unittest.TestCase):
             root = Path(directory)
             registry = ProviderRegistry(root / "registry.json")
             registry.providers = {
-                "vision": ProviderRecord("vision", capabilities=CapabilitySet(vision=True, tools=True), active_by_default=True),
-                "text": ProviderRecord("text", capabilities=CapabilitySet(vision=False, tools=False), active_by_default=True),
+                "vision": ProviderRecord("vision", working=True, url="https://vision", capabilities=CapabilitySet(vision=True, tools=True), active_by_default=True),
+                "text": ProviderRecord("text", working=True, url="https://text", capabilities=CapabilitySet(vision=False, tools=False), active_by_default=True),
             }
             router = AdaptiveRouter(registry, HealthStore(root / "health.json"))
             self.assertEqual(router.rank("model", {"vision": True}), ["vision"])
