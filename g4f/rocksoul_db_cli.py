@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from dataclasses import asdict
 from typing import Any
 
 from .rocksoul_db import RocksoulDB, DB_PATH
@@ -144,7 +145,7 @@ def main() -> None:
             max_total_time=max(0.1, args.total_time),
         )
         result = ExecutionEngine(db=db).execute(request)
-        print(json.dumps({"request_id": result.request_id, "ok": result.ok, "model": result.model, "provider": result.provider, "outcome": result.outcome, "error_class": result.error_class, "error": result.error, "attempts": [item.__dict__ for item in result.attempts]}, indent=2, default=str))
+        print(json.dumps({"request_id": result.request_id, "ok": result.ok, "model": result.model, "provider": result.provider, "outcome": result.outcome, "error_class": result.error_class, "error": result.error, "attempts": [asdict(item) for item in result.attempts]}, indent=2, default=str))
     elif args.command == "trace":
         print(json.dumps(ExecutionTraceStore(db).trace(args.request_id) or {"request_id": args.request_id, "found": False}, indent=2))
     elif args.command == "status":
