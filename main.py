@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 # ROCKSOUL · g4f Launcher
-# GUI + FastAPI/OpenAI-compatible API supervisor.
-# Includes Windows-safe BLAS limits and automatic FFmpeg bootstrap.
+# Local-safe GUI + FastAPI/OpenAI-compatible API supervisor.
+# Includes Windows-safe BLAS limits, FFmpeg bootstrap, health checks,
+# bounded auto-restart, graceful shutdown, and structured supervisor logs.
 
 import argparse
 import ctypes
 import hashlib
 import importlib.metadata
+import json
 import os
 import platform
 import shutil
@@ -20,6 +22,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Prevent BLAS/OpenMP memory explosions when API reload spawns a child.
@@ -32,13 +35,19 @@ RESET, BOLD = "\033[0m", "\033[1m"
 CYAN, MAGENTA, GREEN = "\033[96m", "\033[95m", "\033[92m"
 YELLOW, RED, BLUE, WHITE, GRAY = "\033[93m", "\033[91m", "\033[94m", "\033[97m", "\033[90m"
 
-GUI_HOST = "0.0.0.0"
+DEFAULT_HOST = "127.0.0.1"
+LAN_HOST = "0.0.0.0"
 GUI_PORT = 8080
-API_HOST = "0.0.0.0"
 API_PORT = 8081
 TIMEOUT = 30
 STREAM_TIMEOUT = 30
+HEALTH_TIMEOUT = 30
+HEALTH_INTERVAL = 1.0
+RESTART_DELAY = 2.0
+MAX_RESTARTS = 3
 
+ROCKSOUL_HOME = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ROCKSOUL" / "g4f"
+LOG_DIR = ROCKSOUL_HOME / "logs"
 FFMPEG_HOME = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ROCKSOUL" / "ffmpeg"
 FFMPEG_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-lgpl.zip"
 FFMPEG_CHECKSUM_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/checksums.sha256"
@@ -55,15 +64,22 @@ class Config:
     api_port: int
     timeout: int
     stream_timeout: int
+    health_timeout: int
+    health_interval: float
+    restart_delay: float
+    max_restarts: int
     auto_install: bool
     no_color: bool
     quiet: bool
+    log_dir: Path
 
 
 @dataclass(slots=True)
 class Managed:
     name: str
     process: subprocess.Popen[bytes]
+    health_url: str
+    restarts: int = 0
 
 
 class C:
@@ -136,6 +152,21 @@ def memory_info() -> str:
     return "unavailable"
 
 
+def log_event(log_dir: Path, event: str, **fields: object) -> None:
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "pid": os.getpid(),
+            **fields,
+        }
+        with (log_dir / "supervisor.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        pass
+
+
 def find_ffmpeg() -> str | None:
     direct = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
     if direct:
@@ -170,13 +201,17 @@ def add_ffmpeg_to_path(ffmpeg: str | None) -> None:
         os.environ["PATH"] = bin_dir + os.pathsep + path
 
 
-def run_command(c: C, command: list[str], title: str) -> bool:
+def run_command(c: C, command: list[str], title: str, log_dir: Path | None = None) -> bool:
     print(f"  {c.yellow('▶')} {c.white(title)}")
     print(f"    {c.gray(' '.join(command))}")
     try:
         result = subprocess.run(command, check=False)
+        if log_dir:
+            log_event(log_dir, "command", title=title, returncode=result.returncode, command=command)
         return result.returncode == 0
     except OSError as exc:
+        if log_dir:
+            log_event(log_dir, "command_error", title=title, error=str(exc), command=command)
         print(f"    {c.red(str(exc))}")
         return False
 
@@ -185,7 +220,6 @@ def download(url: str, target: Path, c: C) -> None:
     print(f"  {c.yellow('▶')} {c.white('Downloading FFmpeg portable build')}")
     print(f"    {c.gray(url)}")
     request = urllib.request.Request(url, headers={"User-Agent": "ROCKSOUL-g4f-launcher"})
-
     with urllib.request.urlopen(request, timeout=120) as response:
         total = int(response.headers.get("Content-Length", "0"))
         done = 0
@@ -279,7 +313,7 @@ def install_portable_ffmpeg(c: C) -> str | None:
     return None
 
 
-def ensure_ffmpeg(c: C, auto_install: bool) -> str | None:
+def ensure_ffmpeg(c: C, auto_install: bool, log_dir: Path) -> str | None:
     existing = find_ffmpeg()
     if existing:
         add_ffmpeg_to_path(existing)
@@ -289,7 +323,7 @@ def ensure_ffmpeg(c: C, auto_install: bool) -> str | None:
 
     winget = shutil.which("winget")
     if winget:
-        run_command(c, [winget, "install", "--id", "Gyan.FFmpeg", "--exact", "--scope", "user", "--silent", "--accept-package-agreements", "--accept-source-agreements"], "Trying WinGet FFmpeg")
+        run_command(c, [winget, "install", "--id", "Gyan.FFmpeg", "--exact", "--scope", "user", "--silent", "--accept-package-agreements", "--accept-source-agreements"], "Trying WinGet FFmpeg", log_dir)
         found = find_ffmpeg()
         if found:
             add_ffmpeg_to_path(found)
@@ -298,7 +332,7 @@ def ensure_ffmpeg(c: C, auto_install: bool) -> str | None:
 
     choco = shutil.which("choco")
     if choco:
-        run_command(c, [choco, "install", "ffmpeg-full", "-y", "--no-progress"], "Trying Chocolatey FFmpeg")
+        run_command(c, [choco, "install", "ffmpeg-full", "-y", "--no-progress"], "Trying Chocolatey FFmpeg", log_dir)
         found = find_ffmpeg()
         if found:
             add_ffmpeg_to_path(found)
@@ -306,13 +340,16 @@ def ensure_ffmpeg(c: C, auto_install: bool) -> str | None:
 
     scoop = shutil.which("scoop")
     if scoop:
-        run_command(c, [scoop, "install", "ffmpeg"], "Trying Scoop FFmpeg")
+        run_command(c, [scoop, "install", "ffmpeg"], "Trying Scoop FFmpeg", log_dir)
         found = find_ffmpeg()
         if found:
             add_ffmpeg_to_path(found)
             return found
 
-    return install_portable_ffmpeg(c)
+    found = install_portable_ffmpeg(c)
+    if found:
+        log_event(log_dir, "ffmpeg_ready", path=found)
+    return found
 
 
 def configure_environment(config: Config) -> None:
@@ -329,47 +366,64 @@ def configure_environment(config: Config) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="rockg4f",
-        description="ROCKSOUL launcher for g4f GUI and Interference API",
+        description="ROCKSOUL supervisor for g4f GUI and Interference API",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("mode", nargs="?", choices=["gui", "api", "both"], default="both")
+    parser.add_argument("mode", nargs="?", choices=["gui", "api", "both", "doctor"], default="both")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--no-reload", action="store_true")
     parser.add_argument("--no-auto-install", action="store_true")
-    parser.add_argument("--gui-host", default=GUI_HOST)
+    parser.add_argument("--lan", action="store_true", help="Bind GUI and API to 0.0.0.0")
+    parser.add_argument("--gui-host", default=None)
     parser.add_argument("--gui-port", type=int, default=GUI_PORT)
-    parser.add_argument("--api-host", default=API_HOST)
+    parser.add_argument("--api-host", default=None)
     parser.add_argument("--api-port", type=int, default=API_PORT)
     parser.add_argument("--timeout", type=int, default=TIMEOUT)
     parser.add_argument("--stream-timeout", type=int, default=STREAM_TIMEOUT)
+    parser.add_argument("--health-timeout", type=int, default=HEALTH_TIMEOUT)
+    parser.add_argument("--health-interval", type=float, default=HEALTH_INTERVAL)
+    parser.add_argument("--restart-delay", type=float, default=RESTART_DELAY)
+    parser.add_argument("--max-restarts", type=int, default=MAX_RESTARTS)
+    parser.add_argument("--no-restart", action="store_true")
     parser.add_argument("--no-color", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--version", action="store_true")
+    parser.add_argument("--log-dir", default=str(LOG_DIR))
     return parser.parse_args()
 
 
 def make_config(args: argparse.Namespace) -> Config:
+    gui_host = args.gui_host or (LAN_HOST if args.lan else DEFAULT_HOST)
+    api_host = args.api_host or (LAN_HOST if args.lan else DEFAULT_HOST)
     if not 1 <= args.gui_port <= 65535 or not 1 <= args.api_port <= 65535:
         raise ValueError("Ports must be between 1 and 65535")
     if args.mode == "both" and args.gui_port == args.api_port:
         raise ValueError("GUI and API ports must be different in both mode")
     if args.timeout <= 0 or args.stream_timeout <= 0:
         raise ValueError("Timeout values must be greater than zero")
-    debug = bool(args.debug)
+    if args.health_timeout <= 0 or args.health_interval <= 0:
+        raise ValueError("Health values must be greater than zero")
+    if args.restart_delay < 0 or args.max_restarts < 0:
+        raise ValueError("Restart values cannot be negative")
     return Config(
         mode=args.mode,
-        debug=debug,
-        reload=debug and not args.no_reload,
-        gui_host=args.gui_host,
+        debug=bool(args.debug),
+        reload=bool(args.debug and not args.no_reload),
+        gui_host=gui_host,
         gui_port=args.gui_port,
-        api_host=args.api_host,
+        api_host=api_host,
         api_port=args.api_port,
         timeout=args.timeout,
         stream_timeout=args.stream_timeout,
+        health_timeout=args.health_timeout,
+        health_interval=args.health_interval,
+        restart_delay=args.restart_delay,
+        max_restarts=0 if args.no_restart else args.max_restarts,
         auto_install=not args.no_auto_install,
         no_color=args.no_color,
         quiet=args.quiet,
+        log_dir=Path(args.log_dir).expanduser(),
     )
 
 
@@ -382,6 +436,33 @@ def port_available(host: str, port: int) -> bool:
             return True
     except OSError:
         return False
+
+
+def health_check(url: str, timeout: float) -> bool:
+    request = urllib.request.Request(url, headers={"User-Agent": "ROCKSOUL-health/1"}, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return 200 <= response.status < 400
+    except (OSError, urllib.error.URLError):
+        return False
+
+
+def wait_for_health(managed: Managed, config: Config, c: C, log_dir: Path) -> bool:
+    started = time.monotonic()
+    while time.monotonic() - started < config.health_timeout:
+        code = managed.process.poll()
+        if code is not None:
+            log_event(log_dir, "process_exit_during_health", service=managed.name, pid=managed.process.pid, returncode=code)
+            return False
+        if health_check(managed.health_url, min(config.health_interval, 3.0)):
+            elapsed = time.monotonic() - started
+            print(f"  {label(c, managed.name + ' HEALTH')}{ok(c)} {c.gray(f'{elapsed:.1f}s')}")
+            log_event(log_dir, "health_ready", service=managed.name, pid=managed.process.pid, url=managed.health_url, seconds=round(elapsed, 2))
+            return True
+        time.sleep(config.health_interval)
+    print(f"  {warn(c)} {c.yellow(f'{managed.name} health timeout: {managed.health_url}')}")
+    log_event(log_dir, "health_timeout", service=managed.name, pid=managed.process.pid, url=managed.health_url)
+    return False
 
 
 def build_gui(config: Config) -> list[str]:
@@ -400,26 +481,81 @@ def build_api(config: Config) -> list[str]:
     return command
 
 
-def start_process(name: str, command: list[str], c: C) -> Managed:
+def start_process(name: str, command: list[str], health_url: str, c: C, log_dir: Path, restarts: int = 0) -> Managed:
     print(f"  {c.green('▶')} {c.white(f'Starting {name}')}")
     print(f"    {c.gray(' '.join(command))}")
     process = subprocess.Popen(command, cwd=str(Path.cwd()), env=os.environ.copy())
     print(f"    {label(c, 'PID')}{c.white(str(process.pid))}")
-    return Managed(name, process)
+    log_event(log_dir, "process_start", service=name, pid=process.pid, command=command, restart_count=restarts)
+    return Managed(name=name, process=process, health_url=health_url, restarts=restarts)
+
+
+def stop_process(managed: Managed, c: C, reason: str = "shutdown") -> None:
+    if managed.process.poll() is not None:
+        return
+    print(f"  {c.yellow('■')} {c.white(f'Stopping {managed.name}')}{c.gray(f' ({reason})')}")
+    try:
+        managed.process.terminate()
+        managed.process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        managed.process.kill()
+    except OSError:
+        pass
 
 
 def stop_all(processes: list[Managed], c: C) -> None:
     for managed in reversed(processes):
-        if managed.process.poll() is not None:
-            continue
-        print(f"  {c.yellow('■')} {c.white(f'Stopping {managed.name}')} {c.gray(f'(PID {managed.process.pid})')}")
-        try:
-            managed.process.terminate()
-            managed.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            managed.process.kill()
-        except OSError:
-            pass
+        stop_process(managed, c)
+
+
+def service_spec(name: str, config: Config) -> tuple[list[str], str]:
+    if name == "GUI":
+        return build_gui(config), f"http://127.0.0.1:{config.gui_port}/chat/"
+    return build_api(config), f"http://127.0.0.1:{config.api_port}/docs"
+
+
+def restart_service(index: int, processes: list[Managed], config: Config, c: C) -> bool:
+    old = processes[index]
+    if old.restarts >= config.max_restarts:
+        print(f"  {fail(c)} {c.red(f'{old.name} restart budget exhausted ({old.restarts}/{config.max_restarts})')}")
+        log_event(config.log_dir, "restart_exhausted", service=old.name, restart_count=old.restarts)
+        return False
+    stop_process(old, c, reason="restart")
+    if config.restart_delay:
+        time.sleep(config.restart_delay)
+    command, health_url = service_spec(old.name, config)
+    new = start_process(old.name, command, health_url, c, config.log_dir, old.restarts + 1)
+    if not wait_for_health(new, config, c, config.log_dir):
+        stop_process(new, c, reason="failed health")
+        log_event(config.log_dir, "restart_failed", service=new.name, restart_count=new.restarts)
+        processes[index] = new
+        return False
+    processes[index] = new
+    print(f"  {c.green('↻')} {c.white(old.name)} {c.green('recovered')} {c.gray(f'(restart {new.restarts})')}")
+    log_event(config.log_dir, "restart_success", service=new.name, restart_count=new.restarts)
+    return True
+
+
+def doctor(config: Config, c: C) -> int:
+    ffmpeg = find_ffmpeg()
+    checks = [
+        ("PYTHON", sys.version.split()[0], True),
+        ("G4F", g4f_version(), g4f_version() != "unknown"),
+        ("FFMPEG", ffmpeg or "not found", ffmpeg is not None),
+        (f"GUI PORT {config.gui_port}", "available" if port_available(config.gui_host, config.gui_port) else "busy", port_available(config.gui_host, config.gui_port)),
+        (f"API PORT {config.api_port}", "available" if port_available(config.api_host, config.api_port) else "busy", port_available(config.api_host, config.api_port)),
+    ]
+    print()
+    print(c.bold(c.magenta("  ROCKSOUL DOCTOR")))
+    print()
+    failed = False
+    for name, value, passed in checks:
+        print(f"  {label(c, name)}{c.green(str(value)) if passed else c.red(str(value))} {ok(c) if passed else fail(c)}")
+        failed = failed or not passed
+    print(f"  {label(c, 'MEMORY')}{memory_info()}")
+    print(f"  {label(c, 'LOG DIR')}{config.log_dir}")
+    log_event(config.log_dir, "doctor", passed=not failed, ffmpeg=ffmpeg, g4f=g4f_version())
+    return 1 if failed else 0
 
 
 def banner(config: Config, c: C, ffmpeg: str | None) -> None:
@@ -427,56 +563,37 @@ def banner(config: Config, c: C, ffmpeg: str | None) -> None:
         return
     print()
     print(c.cyan("  ╭────────────────────────────────────────────────────────╮"))
-    print(c.cyan("  │") + "                " + c.magenta("ROCKSOUL") + c.gray(" · ") + c.cyan("g4f Launcher") + "                 " + c.cyan("│"))
+    print(c.cyan("  │") + "                " + c.magenta("ROCKSOUL") + c.gray(" · ") + c.cyan("g4f Supervisor") + "                 " + c.cyan("│"))
     print(c.cyan("  ╰────────────────────────────────────────────────────────╯"))
     print()
-    print(c.bold(c.magenta("  MODE")))
+    print(c.bold(c.magenta("  RUNTIME")))
     print(f"  {label(c, 'MODE')}{c.cyan(config.mode.upper())}")
     print(f"  {label(c, 'DEBUG')}{c.green('● ON') if config.debug else c.gray('● OFF')}")
     print(f"  {label(c, 'API RELOAD')}{c.green('● ON') if config.reload else c.gray('● OFF')}")
-    if config.mode in ("gui", "both"):
-        print(f"  {label(c, 'GUI RELOAD')}{c.gray('● OFF (official runner)')}")
+    print(f"  {label(c, 'AUTO RESTART')}{c.green(f'● {config.max_restarts}') if config.max_restarts else c.gray('● OFF')}")
+    print(f"  {label(c, 'PYTHON')}{platform.python_version()}")
+    print(f"  {label(c, 'G4F')}{g4f_version()}")
+    print(f"  {label(c, 'MEMORY')}{memory_info()}")
+    print(f"  {label(c, 'FFMPEG')}{c.green(ffmpeg) if ffmpeg else c.yellow('NOT FOUND')}")
+    print(f"  {label(c, 'LOGS')}{c.cyan(str(config.log_dir / 'supervisor.jsonl'))}")
     print()
     if config.mode in ("gui", "both"):
         print(c.bold(c.magenta("  GUI SERVER")))
-        print(f"  {label(c, 'HOST')}{c.white(config.gui_host)}")
-        print(f"  {label(c, 'PORT')}{c.white(str(config.gui_port))}")
+        print(f"  {label(c, 'HOST')}{config.gui_host}")
+        print(f"  {label(c, 'PORT')}{config.gui_port}")
         print(f"  {label(c, 'CHAT')}{c.cyan(f'http://127.0.0.1:{config.gui_port}/chat/')}")
         print()
     if config.mode in ("api", "both"):
         print(c.bold(c.magenta("  INTERFERENCE API")))
-        print(f"  {label(c, 'HOST')}{c.white(config.api_host)}")
-        print(f"  {label(c, 'PORT')}{c.white(str(config.api_port))}")
+        print(f"  {label(c, 'HOST')}{config.api_host}")
+        print(f"  {label(c, 'PORT')}{config.api_port}")
         print(f"  {label(c, 'BASE URL')}{c.cyan(f'http://127.0.0.1:{config.api_port}/v1')}")
         print(f"  {label(c, 'SWAGGER')}{c.cyan(f'http://127.0.0.1:{config.api_port}/docs')}")
         print(f"  {label(c, 'REDOC')}{c.cyan(f'http://127.0.0.1:{config.api_port}/redoc')}")
         print()
-    print(c.bold(c.magenta("  RUNTIME")))
-    print(f"  {label(c, 'PYTHON')}{c.white(platform.python_version())}")
-    print(f"  {label(c, 'G4F')}{c.white(g4f_version())}")
-    print(f"  {label(c, 'TIMEOUT')}{c.yellow(f'{config.timeout}s')}")
-    print(f"  {label(c, 'STREAM TIMEOUT')}{c.yellow(f'{config.stream_timeout}s')}")
-    print(f"  {label(c, 'MEMORY')}{c.white(memory_info())}")
-    print()
     print(c.bold(c.magenta("  PERFORMANCE")))
     for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
-        print(f"  {label(c, name.removesuffix('_NUM_THREADS'))}{c.green(os.environ[name])}{c.gray(' threads')}")
-    print()
-    print(c.bold(c.magenta("  DEPENDENCIES")))
-    if ffmpeg:
-        print(f"  {label(c, 'FFMPEG')}{c.green(ffmpeg)} {ok(c)}")
-    else:
-        print(f"  {label(c, 'FFMPEG')}{c.yellow('NOT FOUND')} {warn(c)}")
-    print()
-    print(c.cyan("  " + "─" * 58))
-    print()
-    print(f"  {label(c, 'STATUS')}{c.bold(c.green('● READY'))}")
-    if config.debug and config.reload:
-        print(f"  {c.green('✓')} {c.white('Development mode')} {c.gray('·')} {c.green('API debug + auto reload enabled')}")
-    if config.mode in ("gui", "both"):
-        print(f"  {c.gray('•')} {c.gray('GUI uses g4f official runner · no reload flag')}")
-    if not ffmpeg:
-        print(f"  {c.yellow('⚠')} {c.yellow('FFmpeg unavailable · audio features may be limited')}")
+        print(f"  {label(c, name.removesuffix('_NUM_THREADS'))}{c.green(os.environ[name])} threads")
     print()
 
 
@@ -487,28 +604,25 @@ def main() -> int:
 
     try:
         config = make_config(args)
+        config.log_dir.mkdir(parents=True, exist_ok=True)
         configure_environment(config)
+        log_event(config.log_dir, "launcher_start", mode=config.mode, debug=config.debug, reload=config.reload)
 
         if args.version:
             print(f"ROCKSOUL · g4f {g4f_version()} · Python {platform.python_version()}")
             return 0
 
-        ffmpeg = ensure_ffmpeg(colors, config.auto_install)
+        # Read-only checks never install or mutate FFmpeg/system state.
+        if args.check or config.mode == "doctor":
+            return doctor(config, colors)
+
+        ffmpeg = ensure_ffmpeg(colors, config.auto_install, config.log_dir)
         if ffmpeg:
             add_ffmpeg_to_path(ffmpeg)
-
-        if args.check:
-            print()
-            print(f"{label(colors, 'G4F')}{g4f_version()} {ok(colors) if g4f_version() != 'unknown' else fail(colors)}")
-            print(f"{label(colors, 'PYTHON')}{platform.python_version()} {ok(colors)}")
-            print(f"{label(colors, 'MEMORY')}{memory_info()}")
-            print(f"{label(colors, 'FFMPEG')}{ffmpeg or 'not found'}")
-            return 0
 
         if config.mode in ("gui", "both") and not port_available(config.gui_host, config.gui_port):
             print(f"\n  {fail(colors)} {colors.red(f'GUI port {config.gui_port} is busy')}")
             return 1
-
         if config.mode in ("api", "both") and not port_available(config.api_host, config.api_port):
             print(f"\n  {fail(colors)} {colors.red(f'API port {config.api_port} is busy')}")
             return 1
@@ -516,40 +630,66 @@ def main() -> int:
         banner(config, colors, ffmpeg)
 
         if config.mode in ("gui", "both"):
-            processes.append(start_process("GUI", build_gui(config), colors))
+            managed = start_process("GUI", build_gui(config), f"http://127.0.0.1:{config.gui_port}/chat/", colors, config.log_dir)
+            processes.append(managed)
         if config.mode in ("api", "both"):
-            processes.append(start_process("API", build_api(config), colors))
+            managed = start_process("API", build_api(config), f"http://127.0.0.1:{config.api_port}/docs", colors, config.log_dir)
+            processes.append(managed)
 
         print()
-        print(f"  {label(colors, 'STATUS')}{colors.bold(colors.green('● RUNNING'))}")
-        if config.mode in ("gui", "both"):
-            print(f"  {colors.magenta('➜')} {colors.cyan(f'GUI    http://127.0.0.1:{config.gui_port}/chat/')}")
-        if config.mode in ("api", "both"):
-            print(f"  {colors.magenta('➜')} {colors.cyan(f'API    http://127.0.0.1:{config.api_port}/v1')}")
-            print(f"  {colors.magenta('➜')} {colors.cyan(f'DOCS   http://127.0.0.1:{config.api_port}/docs')}")
-            print(f"  {colors.magenta('➜')} {colors.cyan(f'REDOC  http://127.0.0.1:{config.api_port}/redoc')}")
+        all_ready = True
+        for managed in processes:
+            if not wait_for_health(managed, config, colors, config.log_dir):
+                all_ready = False
+                break
+        if not all_ready:
+            stop_all(processes, colors)
+            return 1
+
         print()
+        print(f"  {label(colors, 'STATUS')}{colors.bold(colors.green('● READY'))}")
+        for managed in processes:
+            print(f"  {colors.magenta('➜')} {colors.cyan(managed.health_url)}")
+        print()
+        log_event(config.log_dir, "launcher_ready", services=[managed.name for managed in processes])
 
         while True:
-            for managed in processes:
+            for index, managed in enumerate(processes):
                 code = managed.process.poll()
+                if code is None and health_check(managed.health_url, min(config.health_interval, 3.0)):
+                    continue
                 if code is not None:
-                    print(f"\n  {fail(colors)} {colors.red(managed.name)} {colors.white('stopped with exit code')} {colors.red(str(code))}")
-                    return int(code)
-            time.sleep(0.5)
+                    print(f"\n  {warn(colors)} {colors.yellow(managed.name)} stopped with exit code {code}")
+                    log_event(config.log_dir, "process_exit", service=managed.name, pid=managed.process.pid, returncode=code)
+                else:
+                    print(f"\n  {warn(colors)} {colors.yellow(managed.name)} became unhealthy")
+                    log_event(config.log_dir, "health_lost", service=managed.name, pid=managed.process.pid, url=managed.health_url)
+                if not restart_service(index, processes, config, colors):
+                    stop_all(processes, colors)
+                    return 1
+            time.sleep(max(config.health_interval, 0.5))
 
     except KeyboardInterrupt:
         print(f"\n  {colors.yellow('● Shutdown requested')}")
+        log_event(config.log_dir, "shutdown", reason="keyboard_interrupt")
         return 130
     except ValueError as exc:
         print(f"\n  {fail(colors)} {colors.red(str(exc))}")
         return 2
     except Exception as exc:
         print(f"\n  {fail(colors)} {colors.red(f'Launcher error: {exc}')}")
+        try:
+            log_event(config.log_dir, "launcher_error", error=str(exc))
+        except UnboundLocalError:
+            pass
         return 1
     finally:
         if processes:
             stop_all(processes, colors)
+            try:
+                log_event(config.log_dir, "launcher_stop")
+            except UnboundLocalError:
+                pass
 
 
 if __name__ == "__main__":
