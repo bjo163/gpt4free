@@ -16,7 +16,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ROCKSOUL" / "g4f"
@@ -175,7 +175,7 @@ class RocksoulDB:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
             conn.execute(
-                "INSERT INTO meta(key, value) VALUES('schema_version, ? ) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                "INSERT INTO meta(key, value) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (str(SCHEMA_VERSION),),
             )
 
@@ -213,7 +213,7 @@ class RocksoulDB:
                     needs_auth=excluded.needs_auth,
                     status=excluded.status,
                     updated_at=excluded.updated_at
-                """ ,
+                """,
                 (name, url, working, active_by_default, int(needs_auth), status, now, now),
             )
             return int(conn.execute("SELECT id FROM providers WHERE name = ?", (name,)).fetchone()["id"])
@@ -326,13 +326,11 @@ class RocksoulDB:
         with self.connect() as conn:
             row = conn.execute(
                 """
-                SELECT
-                    COUNT(*) AS attempts,
-                    SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END) AS successes,
-                    SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END) AS failures,
-                    MAX(finished_at) AS updated_at
-                FROM probe_runs
-                WHERE provider_id=?
+                SELECT COUNT(*) AS attempts,
+                       SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END) AS successes,
+                       SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END) AS failures,
+                       MAX(finished_at) AS updated_at
+                FROM probe_runs WHERE provider_id=?
                 """,
                 (pid,),
             ).fetchone()
@@ -392,10 +390,7 @@ class RocksoulDB:
         model_id = self.upsert_model(model)
         params: list[Any] = [model_id]
         sql = """
-            SELECT p.name,
-                   pm.verified,
-                   p.active_by_default,
-                   p.needs_auth
+            SELECT p.name, pm.verified, p.active_by_default, p.needs_auth
             FROM providers p
             JOIN provider_models pm ON pm.provider_id=p.id
             WHERE pm.model_id=?
@@ -445,29 +440,31 @@ class RocksoulDB:
             try:
                 data = json.loads(registry_path.read_text(encoding="utf-8"))
                 for value in data.get("providers", {}).values():
-                    self.upsert_provider(
-                        value.get("name", ""),
-                        value.get("url"),
-                        value.get("working"),
-                        value.get("active_by_default"),
-                        bool(value.get("needs_auth", False)),
-                    )
+                    name = str(value.get("name", ""))
+                    if not name:
+                        continue
+                    self.upsert_provider(name, value.get("url"), value.get("working"), value.get("active_by_default"), bool(value.get("needs_auth", False)))
                     imported["providers"] += 1
                     for model in value.get("models", []):
-                        self.bind_model(value.get("name", ""), str(model), False)
+                        self.bind_model(name, str(model), False)
                         imported["models"] += 1
                 for model, bindings in data.get("models", {}).items():
                     for binding in bindings:
-                        self.bind_model(model, binding.get("provider", ""), bool(binding.get("verified", False)))
+                        provider = str(binding.get("provider", ""))
+                        if provider:
+                            self.bind_model(model, provider, bool(binding.get("verified", False)))
             except (OSError, ValueError, TypeError):
                 pass
         if health_path.exists():
             try:
                 data = json.loads(health_path.read_text(encoding="utf-8"))
                 for provider, value in data.items():
-                    for _ in range(int(value.get("successes", 0))):
-                        self.record_probe(provider, "legacy", True, value.get("last_latency_ms"))
-                    for _ in range(int(value.get("failures", 0))):
+                    successes = int(value.get("successes", 0))
+                    failures = int(value.get("failures", 0))
+                    latency = value.get("last_latency_ms")
+                    for _ in range(successes):
+                        self.record_probe(provider, "legacy", True, latency)
+                    for _ in range(failures):
                         self.record_probe(provider, "legacy", False, error_class=value.get("last_error_class"), error=value.get("last_error"))
                     imported["health"] += 1
             except (OSError, ValueError, TypeError):
@@ -511,7 +508,7 @@ def main() -> None:
     route = sub.add_parser("route")
     route.add_argument("model")
     route.add_argument("--verified-only", action="store_true")
-    status = sub.add_parser("status")
+    sub.add_parser("status")
     args = parser.parse_args()
     db = RocksoulDB()
 
@@ -521,18 +518,18 @@ def main() -> None:
         print(json.dumps({"migrated": migrate(), "db": str(db.path)}, indent=2))
     elif args.command == "health":
         if args.provider:
-            health = db.health(args.provider)
+            health_value = db.health(args.provider)
             print(json.dumps({
-                "provider": health.provider,
-                "attempts": health.attempts,
-                "successes": health.successes,
-                "failures": health.failures,
-                "success_rate": round(health.success_rate * 100.0, 2),
-                "avg_latency_ms": health.avg_latency_ms,
-                "p95_latency_ms": health.p95_latency_ms,
-                "score": round(health.score, 2),
-                "status": "COOLDOWN" if health.cooldown_until > time.time() else "ACTIVE",
-                "last_error_class": health.last_error_class,
+                "provider": health_value.provider,
+                "attempts": health_value.attempts,
+                "successes": health_value.successes,
+                "failures": health_value.failures,
+                "success_rate": round(health_value.success_rate * 100.0, 2),
+                "avg_latency_ms": health_value.avg_latency_ms,
+                "p95_latency_ms": health_value.p95_latency_ms,
+                "score": round(health_value.score, 2),
+                "status": "COOLDOWN" if health_value.cooldown_until > time.time() else "ACTIVE",
+                "last_error_class": health_value.last_error_class,
             }, indent=2))
         else:
             with db.connect() as conn:
