@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from .rocksoul_db import RocksoulDB, DB_PATH
+from .rocksoul_probe import LiveProbe, default_probe_model, result_summary
 
 
 def inspect_provider(db: RocksoulDB, name: str) -> dict[str, Any]:
@@ -80,7 +81,7 @@ def json_health(db: RocksoulDB, provider: str | None) -> Any:
             "avg_latency_ms": item.avg_latency_ms,
             "p95_latency_ms": item.p95_latency_ms,
             "score": round(item.score, 2),
-            "status": "COOLDOWN" if item.cooldown_until > time.time() else "ACTIVE",
+            "status": "COOLDOWN" if item.cooldown_until > time.time() else ("DEGRADED" if item.attempts and item.success_rate < 0.7 else "ACTIVE"),
             "last_error_class": item.last_error_class,
         }
     with db.connect() as conn:
@@ -92,9 +93,21 @@ def json_health(db: RocksoulDB, provider: str | None) -> Any:
             "attempts": h.attempts,
             "success_rate": round(h.success_rate * 100.0, 2),
             "avg_latency_ms": h.avg_latency_ms,
+            "status": "COOLDOWN" if h.cooldown_until > time.time() else ("DEGRADED" if h.attempts and h.success_rate < 0.7 else "ACTIVE"),
         }
         for item in rows
     ]
+
+
+def _model_for_provider(db: RocksoulDB, provider: str, requested: str | None) -> str:
+    if requested:
+        return requested
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT m.name FROM models m JOIN provider_models pm ON pm.model_id=m.id JOIN providers p ON p.id=pm.provider_id WHERE p.name=? ORDER BY pm.verified DESC, m.name LIMIT 1",
+            (provider,),
+        ).fetchone()
+    return str(row["name"]) if row else default_probe_model()
 
 
 def main() -> None:
@@ -109,6 +122,15 @@ def main() -> None:
     route.add_argument("--verified-only", action="store_true")
     provider = sub.add_parser("provider")
     provider.add_argument("name")
+    probe = sub.add_parser("probe")
+    probe.add_argument("provider")
+    probe.add_argument("--model", default=None)
+    probe.add_argument("--type", choices=["smoke", "stream"], default="smoke")
+    probe.add_argument("--timeout", type=float, default=30.0)
+    probe_all = sub.add_parser("probe-all")
+    probe_all.add_argument("--model", default=None)
+    probe_all.add_argument("--type", choices=["smoke", "stream"], default="smoke")
+    probe_all.add_argument("--concurrency", type=int, default=4)
     sub.add_parser("status")
     args = parser.parse_args()
     db = RocksoulDB()
@@ -133,6 +155,20 @@ def main() -> None:
             }
             for item in candidates
         ], indent=2))
+    elif args.command == "probe":
+        model = _model_for_provider(db, args.provider, args.model)
+        result = LiveProbe(db).probe(args.provider, model, args.type, args.timeout)
+        print(json.dumps(result.to_dict(), indent=2))
+    elif args.command == "probe-all":
+        with db.connect() as conn:
+            providers = [row["name"] for row in conn.execute("SELECT name FROM providers ORDER BY name").fetchall()]
+        if not providers:
+            discover_all(db)
+            with db.connect() as conn:
+                providers = [row["name"] for row in conn.execute("SELECT name FROM providers ORDER BY name").fetchall()]
+        model = args.model or default_probe_model()
+        results = LiveProbe(db).probe_many(providers, model, args.concurrency, args.type)
+        print(json.dumps(result_summary(results), indent=2))
     elif args.command == "status":
         with db.connect() as conn:
             providers = int(conn.execute("SELECT COUNT(*) FROM providers").fetchone()[0])
