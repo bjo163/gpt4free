@@ -84,6 +84,21 @@ class RocksoulExecutionTests(unittest.TestCase):
         self.assertGreater(health.cooldown_until, 0.0)
         self.assertEqual(self.db.route_candidates("demo")[0].provider, "B")
 
+    def test_total_time_budget_stops_fallback(self) -> None:
+        client = FakeClient({"A": ConnectionError("network down")})
+        engine = ExecutionEngine(self.db, client)
+        result = engine.execute(
+            ExecutionRequest(
+                model="demo",
+                messages=[],
+                max_attempts=3,
+                max_total_time=0.000001,
+            )
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(len(result.attempts), 1)
+        self.assertEqual(client.chat.completions.calls, ["A"])
+
     def test_request_identity_is_unique(self) -> None:
         a = ExecutionRequest(model="demo", messages=[])
         b = ExecutionRequest(model="demo", messages=[])
