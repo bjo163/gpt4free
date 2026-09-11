@@ -8,150 +8,97 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 
 ## Status legend
 
-- `DONE` implemented and verified
-- `READY` next executable item
-- `BLOCKED` intentionally waiting on another gate
+- `DONE` implemented and verified by automated tests
+- `VERIFYING` implemented; awaiting the current CI certification
+- `BLOCKED` intentionally waiting on another phase gate
 - `DEFERRED` planned but not in the current release
 
 ## F3 execution intelligence
 
 ### RS-F3-001 — Explicit rate-limit cooldown
-- Status: `READY`
-- Scope: apply `RATE_LIMIT` policy decision to provider state.
-- Files: `g4f/rocksoul_policy.py`, `g4f/rocksoul_db.py`, `g4f/rocksoul_execution.py`, tests.
-- TODO:
-  - Add explicit cooldown mutation with reason and expiry.
-  - Apply `PolicyDecision.cooldown_seconds` after rate-limit failure.
-  - Ensure router skips active cooldown.
-  - Expose cooldown in health/status output.
-  - Cover apply/skip/expiry in offline tests.
-- Acceptance:
-  - A rate-limit failure immediately suppresses that provider for the policy cooldown window.
-  - No extra retry is performed against a provider under active cooldown.
-  - Cooldown never exceeds the configured upper bound.
+- Status: `VERIFYING`
+- Scope: explicit persisted cooldown with reason and expiry.
+- Implementation: `g4f/rocksoul_control.py`, `g4f/rocksoul_execution.py`, routing integration.
+- Acceptance: rate-limit immediately places the provider in bounded `DEGRADED` cooldown; routing excludes it until expiry.
+- Tests: `test_rate_limit_applies_explicit_control_cooldown`, `test_rate_limit_cooldown_blocks_until_expiry`.
 
 ### RS-F3-002 — Same-provider retry budget
-- Status: `READY`
-- Scope: make `max_same_provider_attempts` a real runtime control instead of only using a global `tried` set.
-- TODO:
-  - Track attempts per provider.
-  - Permit same-provider retry only when the policy explicitly requests it.
-  - Enforce `max_same_provider_attempts` independently from total attempts.
-  - Add tests for zero/one/multiple bounded retries.
-- Acceptance:
-  - A provider can never exceed its configured per-provider budget.
-  - Provider fallback still works when same-provider retry is exhausted.
-  - Total attempts and total-time limits always win.
+- Status: `VERIFYING`
+- Scope: per-provider retry counter independent from total-attempt budget.
+- Implementation: `ExecutionRequest.max_same_provider_attempts` and execution provider counters.
+- Acceptance: no provider exceeds its configured retry budget; fallback continues when that budget is exhausted.
+- Tests: `test_same_provider_retry_is_bounded`.
 
 ### RS-F3-003 — Explicit quarantine state
-- Status: `READY`
-- Scope: replace implicit failure-streak interpretation with an explicit lifecycle state.
-- TODO:
-  - Model `ACTIVE`, `DEGRADED`, `QUARANTINED`, `PROBING`, `RE_ADMITTED`.
-  - Persist quarantine reason and timestamps.
-  - Add `quarantine` CLI command.
-  - Make routing honor explicit quarantine.
-- Acceptance:
-  - A provider can be manually quarantined without fake probe failures.
-  - Quarantine is visible in `health` and `status`.
-  - Router excludes quarantined providers.
+- Status: `VERIFYING`
+- Scope: persisted lifecycle state and operator command.
+- Implementation: `ProviderControlStore`, `rocksoul quarantine`, route filtering, health/status output.
+- Acceptance: manual quarantine requires no fake failures and quarantined providers are never selected.
+- Tests: control state machine + CLI contract tests.
 
 ### RS-F3-004 — Recovery and re-admission lifecycle
-- Status: `READY`
-- Scope: make recovery a deterministic state transition.
-- TODO:
-  - Move quarantined provider to `PROBING` before a recovery probe.
-  - Record probe result as recovery evidence.
-  - Re-admit only on successful verification.
-  - Keep provider quarantined on failed recovery.
-  - Add offline state-machine tests.
-- Acceptance:
-  - Recovery cannot silently re-admit an unhealthy provider.
-  - Recovery history is traceable.
+- Status: `VERIFYING`
+- Scope: `QUARANTINED → PROBING → RE_ADMITTED|QUARANTINED`.
+- Implementation: `RecoveryManager` + provider control event history.
+- Acceptance: failed recovery stays quarantined; successful recovery is traceable.
+- Tests: control state-machine coverage; live recovery remains operator-only.
 
 ### RS-F3-005 — Single canonical route explanation
-- Status: `READY`
-- Scope: eliminate parallel explanation logic.
-- TODO:
-  - Make `ExplainableRouter` the canonical explanation engine.
-  - Have execution consume its selected candidate plus reasons.
-  - Persist the same reasons used for selection.
-  - Cover capability rejection, health, verification, latency, cooldown, and ordering.
-- Acceptance:
-  - `route-explain` and execution trace describe the same decision.
-  - No second scoring/explanation implementation can drift from routing behavior.
+- Status: `VERIFYING`
+- Scope: `ExplainableRouter` is the canonical explanation source.
+- Implementation: execution candidate selection and CLI route-explain both consume it; capability failures remain visible as rejection reasons.
+- Acceptance: route explanation exposes state, capability, verification, health, latency, and reasons without a second scoring path.
 
 ### RS-F3-006 — Streaming fallback safety
-- Status: `READY`
-- Scope: define safe fallback behavior once a stream has started.
-- TODO:
-  - Define states: `NOT_STARTED`, `STREAMING`, `COMPLETED`, `FAILED_AFTER_PARTIAL`.
-  - Never silently replay a request after partial output unless an explicit policy permits it.
-  - Persist partial-stream failure in execution trace.
-  - Add fake streaming tests.
-- Acceptance:
-  - No duplicate unsafe user-visible generation after partial output.
-  - Stream failures are observable and bounded.
+- Status: `VERIFYING`
+- Scope: conservative stream lifecycle with no automatic replay after stream exposure.
+- Implementation: stream wrapper records `stream_failed_before_output` or `stream_failed_after_partial`.
+- Acceptance: partial output is never silently duplicated by fallback.
+- Tests: `test_stream_failure_after_partial_output_is_terminal_and_traced`.
 
 ## F6 product CLI
 
 ### RS-F6-001 — CLI contract suite
-- Status: `READY`
-- TODO:
-  - Add offline command tests for `status`, `discover`, `health`, `provider`, `route`, `route-explain`, `execute`, `trace`, `quarantine`, `recover`.
-  - Assert stable JSON keys and exit behavior.
-  - Keep live-provider operations opt-in.
-- Acceptance:
-  - CI validates the documented CLI contract.
+- Status: `VERIFYING`
+- Scope: stable JSON command surface with offline contract tests.
+- Commands: `status`, `discover`, `health`, `provider`, `probe`, `verify`, `route`, `route-explain`, `execute`, `trace`, `quarantine`, `recover`.
+- Tests: `tests/test_rocksoul_cli.py` plus existing ROCKSOUL CLI smoke workflow.
 
 ## F7 verification
 
 ### RS-F7-001 — Execution release matrix
-- Status: `READY`
-- TODO:
-  - Add tests for every error taxonomy branch.
-  - Add fallback ordering tests.
-  - Add total-time and per-provider budgets.
-  - Add persistence and trace reconstruction tests.
-  - Add capability enforcement tests.
-  - Add explicit quarantine/recovery lifecycle tests.
-- Acceptance:
-  - No release gate depends on a live provider.
+- Status: `VERIFYING`
+- Coverage: fallback ordering, taxonomy, bounded retries, cooldown, quarantine, recovery state machine, trace reconstruction, stream safety, CLI contracts.
+- Release requirement: current CI must be green before certification is marked complete.
 
 ## F8 documentation and productization
 
 ### RS-F8-001 — Product README
 - Status: `DONE`
-- Scope: present ROCKSOUL as the primary product identity while preserving accurate g4f attribution.
 
 ### RS-F8-002 — Product architecture docs
 - Status: `DONE`
-- Scope: document product boundaries, execution plane, state model, and roadmap.
 
 ### RS-F8-003 — Contributing and compatibility boundary
-- Status: `READY`
-- TODO:
-  - Document upstream/runtime boundary.
-  - State that provider implementations remain in the runtime layer.
-  - Document how ROCKSOUL changes should avoid breaking g4f compatibility.
+- Status: `DONE`
 
 ## F4/F5 gates
 
 ### RS-F4-001 — Mesh foundation
 - Status: `BLOCKED`
-- Do not start until RS-F3-001 through RS-F3-006 and RS-F7-001 are green.
+- Dependency: F1-F3 + F6 + F7 certification.
 
 ### RS-F5-001 — Arena benchmark plane
 - Status: `BLOCKED`
-- Do not start until execution traces and health feedback are stable.
+- Dependency: stable execution traces and health feedback.
 
 ## Definition of Product-Ready
 
 - F1 execution works through existing runtime provider implementations.
 - F2 persists every attempt and the final outcome.
-- F3 has deterministic taxonomy, bounded retries, explicit cooldown, quarantine, and recovery.
+- F3 has deterministic taxonomy, bounded retries, explicit cooldown, quarantine, recovery, and safe streaming semantics.
 - F6 CLI is documented and contract-tested.
-- F7 tests are offline by default.
+- F7 tests are offline by default and CI-certified.
 - F8 docs use ROCKSOUL product terminology consistently.
 - No duplicate provider implementation exists.
-- F4/F5 are not enabled merely because the scaffolding exists.
+- F4/F5 are not enabled merely because scaffolding exists.
