@@ -36,8 +36,12 @@ dependencies = [
 ]
 
 [project.scripts]
-gpt4free = "gpt4free:main"
+gpt4free = "g4f.cli:main"
 rocksoul = "g4f.rocksoul_platform:main"
+
+[tool.uv.build-backend]
+module-name = "g4f"
+module-root = ""
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
