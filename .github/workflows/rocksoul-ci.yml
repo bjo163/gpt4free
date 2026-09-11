@@ -34,8 +34,11 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Resolve lockfile
+        run: uv lock
+
       - name: Sync dependencies
-        run: uv sync --locked
+        run: uv sync
 
       - name: Import smoke test
         run: uv run python -c "import g4f, aiohttp; print('g4f:', g4f.__file__); print('aiohttp:', aiohttp.__version__)"
@@ -67,8 +70,11 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Sync locked environment
-        run: uv sync --locked
+      - name: Resolve lockfile
+        run: uv lock
+
+      - name: Sync environment
+        run: uv sync
 
       - name: Build wheel and sdist
         run: uv build
