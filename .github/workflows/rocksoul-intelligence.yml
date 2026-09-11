@@ -1,0 +1,30 @@
+name: ROCKSOUL Scheduled Intelligence
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Sync environment
+        run: uv sync
+      - name: Discover providers
+        run: uv run rocksoul discover
+      - name: Run bounded live probes
+        env:
+          ROCKSOUL_LIVE_PROBE: '1'
+        run: uv run rocksoul probe-all --model gpt-4o-mini --type smoke --concurrency 4 --timeout 20
