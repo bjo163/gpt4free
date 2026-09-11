@@ -131,6 +131,7 @@ def main() -> None:
     probe_all.add_argument("--model", default=None)
     probe_all.add_argument("--type", choices=["smoke", "stream"], default="smoke")
     probe_all.add_argument("--concurrency", type=int, default=4)
+    probe_all.add_argument("--timeout", type=float, default=30.0)
     sub.add_parser("status")
     args = parser.parse_args()
     db = RocksoulDB()
@@ -167,7 +168,7 @@ def main() -> None:
             with db.connect() as conn:
                 providers = [row["name"] for row in conn.execute("SELECT name FROM providers ORDER BY name").fetchall()]
         model = args.model or default_probe_model()
-        results = LiveProbe(db).probe_many(providers, model, args.concurrency, args.type)
+        results = LiveProbe(db).probe_many(providers, model, args.concurrency, args.type, args.timeout)
         print(json.dumps(result_summary(results), indent=2))
     elif args.command == "status":
         with db.connect() as conn:
