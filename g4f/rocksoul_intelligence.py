@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
+from .rocksoul_control import ProviderControlStore
 from .rocksoul_db import RocksoulDB, RouteCandidate
 from .rocksoul_probe import LiveProbe
 
@@ -49,20 +50,14 @@ class CapabilityVerifier:
         return [{"type": "function", "function": {"name": "rocksoul_probe", "description": "Return the requested probe token.", "parameters": {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"]}}}]
 
     def _declared(self, provider: Any, capability: str) -> bool | None:
-        mapping = {
-            "streaming": "supports_stream",
-            "vision": "supports_vision",
-            "tools": "supports_native_tools",
-            "structured_output": "supports_structured_output",
-            "image": "supports_image_generation",
-        }
+        mapping = {"streaming": "supports_stream", "vision": "supports_vision", "tools": "supports_native_tools", "structured_output": "supports_structured_output", "image": "supports_image_generation"}
         value = getattr(provider, mapping[capability], None)
         return None if value is None else bool(value)
 
     def verify(self, provider: str, model: str, capability: str, timeout: float = 30.0) -> CapabilityEvidence:
         if capability not in CAPABILITIES:
             raise ValueError(f"Unsupported capability: {capability}")
-        started = time.perf_counter(); ok = False; detail = ""
+        started = time.perf_counter(); ok = False; detail = ""; declared: bool | None = None
         handler: Any | None = None
         try:
             handler = self._provider(provider)
@@ -73,8 +68,7 @@ class CapabilityVerifier:
             else:
                 client = self._client(handler)
                 kwargs: dict[str, Any] = {"model": model, "messages": [{"role": "user", "content": "Reply with exactly: ROCKSOUL_CAPABILITY_OK"}], "provider": handler, "stream": False, "timeout": max(1.0, float(timeout))}
-                if capability == "tools":
-                    kwargs["tools"] = self._tool()
+                if capability == "tools": kwargs["tools"] = self._tool()
                 elif capability == "structured_output":
                     kwargs["response_format"] = {"type": "json_object"}
                     kwargs["messages"] = [{"role": "user", "content": '{"probe":"ROCKSOUL_CAPABILITY_OK"}'}]
@@ -85,8 +79,7 @@ class CapabilityVerifier:
                     ok, detail = bool(image), "image generation returned a response" if image else "empty image response"
                 if capability != "image":
                     result = client.chat.completions.create(**kwargs)
-                    if capability == "tools":
-                        ok = bool(getattr(result, "tool_calls", None)); detail = "tool call returned" if ok else "no tool call returned"
+                    if capability == "tools": ok = bool(getattr(result, "tool_calls", None)); detail = "tool call returned" if ok else "no tool call returned"
                     elif capability == "structured_output":
                         try:
                             parsed = json.loads(str(getattr(result, "content", ""))); ok = isinstance(parsed, dict) and parsed.get("probe") == "ROCKSOUL_CAPABILITY_OK"; detail = "valid JSON object returned" if ok else "JSON object did not match probe"
@@ -104,7 +97,9 @@ class CapabilityVerifier:
         return [self.verify(provider, model, capability, timeout) for capability in capabilities]
 
 class ExplainableRouter:
-    def __init__(self, db: RocksoulDB | None = None) -> None: self.db = db or RocksoulDB()
+    def __init__(self, db: RocksoulDB | None = None) -> None:
+        self.db = db or RocksoulDB()
+        self.control = ProviderControlStore(self.db)
 
     def _capability_state(self, provider: str, model: str, name: str) -> tuple[bool, str]:
         with self.db.connect() as conn:
@@ -118,14 +113,16 @@ class ExplainableRouter:
     def explain(self, model: str, requirements: Sequence[CapabilityRequirement] = (), providers: Sequence[str] | None = None, verified_only: bool = False) -> list[dict[str, Any]]:
         output=[]
         for candidate in self.db.route_candidates(model, providers, verified_only):
-            states={}; reasons=[]; accepted=True
+            control = self.control.get(candidate.provider)
+            states={}; reasons=[]; accepted=not control.blocked
+            if control.blocked: reasons.append(f"provider state {control.state.lower()}")
             for req in requirements:
                 good,state=self._capability_state(candidate.provider,model,req.name); states[req.name]=state
                 if req.required and not good: accepted=False; reasons.append(f"missing verified capability: {req.name} ({state.lower()})")
             reasons.append("model verified" if candidate.model_verified else "model not yet verified")
             reasons.append(f"health score {candidate.health_score:.2f}")
             if candidate.avg_latency_ms is not None: reasons.append(f"average latency {candidate.avg_latency_ms:.1f}ms")
-            output.append({"provider":candidate.provider,"accepted":accepted,"score":round(candidate.score,2),"model_verified":candidate.model_verified,"health_score":round(candidate.health_score,2),"avg_latency_ms":candidate.avg_latency_ms,"capabilities":states,"reasons":reasons})
+            output.append({"provider":candidate.provider,"accepted":accepted,"score":round(candidate.score,2),"model_verified":candidate.model_verified,"health_score":round(candidate.health_score,2),"avg_latency_ms":candidate.avg_latency_ms,"capabilities":states,"control_state":control.state,"control_reason":control.reason,"reasons":reasons})
         return output
 
     def select(self, model: str, requirements: Sequence[CapabilityRequirement] = (), providers: Sequence[str] | None = None) -> dict[str, Any] | None:
@@ -134,13 +131,20 @@ class ExplainableRouter:
         return selected
 
 class RecoveryManager:
-    def __init__(self, db: RocksoulDB | None = None) -> None: self.db=db or RocksoulDB()
+    def __init__(self, db: RocksoulDB | None = None) -> None:
+        self.db = db or RocksoulDB(); self.control = ProviderControlStore(self.db)
     def quarantined(self) -> list[str]:
-        with self.db.connect() as conn: names=[r["name"] for r in conn.execute("SELECT name FROM providers ORDER BY name").fetchall()]
-        return [name for name in names if self.db.health(name).consecutive_failures >= 3]
+        return [item.provider for item in self.control.list() if item.state == "QUARANTINED"]
     def recover(self, providers: Sequence[str] | None = None, model: str = "gpt-4o-mini", timeout: float = 30.0) -> list[dict[str, Any]]:
         targets=list(providers) if providers else self.quarantined(); probe=LiveProbe(self.db); results=[]
         for provider in targets:
+            current=self.control.get(provider)
+            if current.state not in ("QUARANTINED", "DEGRADED", "PROBING"):
+                results.append({"provider":provider,"probe_ok":False,"latency_ms":None,"health_score":round(self.db.health(provider).score,2),"re_admitted":False,"status":current.state,"reason":"provider is not recoverable in current state"}); continue
+            self.control.begin_recovery(provider)
             result=probe.probe(provider,model,"smoke",timeout); health=self.db.health(provider)
-            results.append({"provider":provider,"probe_ok":result.ok,"latency_ms":result.latency_ms,"health_score":round(health.score,2),"re_admitted":result.ok,"status":"RE_ADMITTED" if result.ok else "QUARANTINED"})
+            if result.ok: self.control.re_admit(provider)
+            else: self.control.quarantine(provider, result.error or "recovery_probe_failed")
+            state=self.control.get(provider)
+            results.append({"provider":provider,"probe_ok":result.ok,"latency_ms":result.latency_ms,"health_score":round(health.score,2),"re_admitted":result.ok,"status":state.state})
         return results
