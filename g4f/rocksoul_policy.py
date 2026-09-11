@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Deterministic policy for ROCKSOUL execution retry/fallback decisions."""
 
+import random
 from dataclasses import dataclass
 from enum import Enum
 
@@ -34,14 +35,13 @@ class PolicyDecision:
 
 
 class ExecutionPolicy:
-    """Classify provider failures without performing I/O or retrying itself."""
+    """Classify provider failures and calculate bounded retry delays."""
 
     @staticmethod
     def classify(error: BaseException) -> ErrorClass:
         name = type(error).__name__.lower()
         message = str(error).lower()
         text = f"{name} {message}"
-
         if "timeout" in text or "timed out" in text:
             return ErrorClass.TIMEOUT
         if any(token in text for token in ("rate limit", "ratelimit", "too many requests", "429")):
@@ -76,6 +76,32 @@ class ExecutionPolicy:
         if error_class is ErrorClass.CONTENT_BLOCKED:
             return PolicyDecision(error_class, RetryAction.TERMINAL, False)
         return PolicyDecision(error_class, RetryAction.BOUNDED_RETRY, True)
+
+    @staticmethod
+    def backoff_seconds(
+        decision: PolicyDecision,
+        retry_index: int,
+        *,
+        base: float = 0.25,
+        maximum: float = 8.0,
+        jitter: float = 0.0,
+        rng: random.Random | None = None,
+    ) -> float:
+        """Return a bounded delay; injectable RNG keeps tests deterministic."""
+        if not decision.retryable or decision.action in (RetryAction.TERMINAL, RetryAction.RECOMPUTE_CANDIDATES):
+            return 0.0
+        index = max(0, retry_index)
+        if decision.action is RetryAction.COOLDOWN_NEXT_PROVIDER:
+            delay = decision.cooldown_seconds
+        elif decision.error_class is ErrorClass.TIMEOUT:
+            delay = 0.0
+        else:
+            delay = max(0.0, base) * (2 ** min(index, 5))
+        delay = min(maximum, delay) if maximum >= 0 else delay
+        if jitter > 0 and delay > 0:
+            source = rng or random
+            delay = min(maximum, delay + source.uniform(0.0, jitter))
+        return max(0.0, delay)
 
 
 @dataclass(frozen=True, slots=True)
