@@ -37,7 +37,8 @@ dependencies = [
 
 [project.scripts]
 gpt4free = "g4f.cli:main"
-rocksoul = "g4f.rocksoul_db:main"
+rocksoul = "g4f.rocksoul_db_cli:main"
+rocksoul-db = "g4f.rocksoul_db:main"
 rocksoul-legacy = "g4f.rocksoul_platform:main"
 
 [tool.uv.build-backend]
