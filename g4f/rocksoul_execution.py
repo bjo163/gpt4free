@@ -97,6 +97,13 @@ class ExecutionEngine:
             return bool(response.strip())
         return True
 
+    def _record_route(self, request: ExecutionRequest, candidates: Sequence[Any], selected: str | None) -> None:
+        reasons = ["model_verified", "health_score", "latency_score"]
+        reasons.extend(f"capability:{name}" for name in request.requirements)
+        if request.providers:
+            reasons.append("provider_allowlist")
+        self.db.record_route(request.model, candidates, selected, reasons)
+
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
         started_total = time.monotonic()
         started_wall = time.time()
@@ -115,6 +122,7 @@ class ExecutionEngine:
             providers=request.providers or None,
             capabilities=request.requirements or None,
         )
+        self._record_route(request, candidates, candidates[0].provider if candidates else None)
         if not candidates:
             self.trace.record_execution_run(
                 request.request_id, request.model, started_wall, time.time(),
@@ -210,6 +218,7 @@ class ExecutionEngine:
                         providers=request.providers or None,
                         capabilities=request.requirements or None,
                     )
+                    self._record_route(request, candidates, candidates[0].provider if candidates else None)
                     index = 0
         last = attempts[-1] if attempts else None
         self.trace.record_execution_run(
