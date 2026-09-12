@@ -56,11 +56,18 @@ class RocksoulCliContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             db_path = Path(root) / "ROCKSOUL" / "g4f" / "rocksoul.db"
             db = RocksoulDB(db_path)
-            for name, verified, latency in (("UnverifiedFast", False, 1.0), ("VerifiedSlower", True, 50.0)):
-                db.upsert_provider(name, "https://example.test", True, True, False)
-                db.bind_model(name, "demo", verified=verified)
-                db.set_capability(name, "streaming", True, True, True, model="demo")
-                db.record_probe(name, "smoke", True, latency, model="demo")
+
+            db.upsert_provider("UnverifiedFast", "https://example.test", True, True, False)
+            db.bind_model("UnverifiedFast", "demo", verified=False)
+            db.set_capability("UnverifiedFast", "streaming", True, True, True, model="demo")
+            db.record_probe("UnverifiedFast", "smoke", True, 1.0, model="demo")
+
+            db.upsert_provider("VerifiedSlower", "https://example.test", True, True, False)
+            db.bind_model("VerifiedSlower", "demo", verified=True)
+            db.set_capability("VerifiedSlower", "streaming", True, True, True, model="demo")
+            db.record_probe("VerifiedSlower", "smoke", True, 50.0, model="demo")
+            db.record_probe("VerifiedSlower", "execution", False, 50.0, model="demo", error_class="network", error="synthetic-1")
+            db.record_probe("VerifiedSlower", "execution", False, 50.0, model="demo", error_class="network", error="synthetic-2")
 
             unrestricted = self.run_cli("route", "demo", "--streaming", root=root)
             self.assertEqual(unrestricted.returncode, 0, unrestricted.stderr)
