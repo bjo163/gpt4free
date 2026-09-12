@@ -16,45 +16,53 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 ## F3 execution intelligence
 
 ### RS-F3-001 — Explicit rate-limit cooldown
-- Status: `VERIFYING`
+- Status: `DONE`
 - Scope: explicit persisted cooldown with reason and expiry.
-- Implementation: `g4f/rocksoul_control.py`, `g4f/rocksoul_execution.py`, routing integration.
+- Implementation: `g4f/rocksoul_control.py`, `g4f/rocksoul_execution.py`, `g4f/rocksoul_db.py` routing integration.
 - Acceptance: rate-limit immediately places the provider in bounded `DEGRADED` cooldown; routing excludes it until expiry.
 - Tests: `test_rate_limit_applies_explicit_control_cooldown`, `test_rate_limit_cooldown_blocks_until_expiry`.
 
 ### RS-F3-002 — Same-provider retry budget
-- Status: `VERIFYING`
+- Status: `DONE`
 - Scope: per-provider retry counter independent from total-attempt budget.
 - Implementation: `ExecutionRequest.max_same_provider_attempts` and execution provider counters.
 - Acceptance: no provider exceeds its configured retry budget; fallback continues when that budget is exhausted.
 - Tests: `test_same_provider_retry_is_bounded`.
 
 ### RS-F3-003 — Explicit quarantine state
-- Status: `VERIFYING`
+- Status: `DONE`
 - Scope: persisted lifecycle state and operator command.
-- Implementation: `ProviderControlStore`, `rocksoul quarantine`, route filtering, health/status output.
-- Acceptance: manual quarantine requires no fake failures and quarantined providers are never selected.
-- Tests: control state machine + CLI contract tests.
+- Implementation: `ProviderControlStore`, `rocksoul quarantine`, route filtering, health/status output, failure-streak convergence.
+- Acceptance: manual quarantine requires no fake failures and quarantined providers are never selected; a three-failure legacy streak converges to explicit `QUARANTINED`.
+- Tests: control state machine + `test_provider_enters_legacy_health_cooldown_after_failure_streak`.
 
 ### RS-F3-004 — Recovery and re-admission lifecycle
-- Status: `VERIFYING`
+- Status: `DONE`
 - Scope: `QUARANTINED → PROBING → RE_ADMITTED|QUARANTINED`.
 - Implementation: `RecoveryManager` + provider control event history.
 - Acceptance: failed recovery stays quarantined; successful recovery is traceable.
 - Tests: control state-machine coverage; live recovery remains operator-only.
 
 ### RS-F3-005 — Single canonical route explanation
-- Status: `VERIFYING`
+- Status: `DONE`
 - Scope: `ExplainableRouter` is the canonical explanation source.
 - Implementation: execution candidate selection and CLI route-explain both consume it; capability failures remain visible as rejection reasons.
 - Acceptance: route explanation exposes state, capability, verification, health, latency, and reasons without a second scoring path.
+- Tests: intelligence and CLI route-explain contract tests.
 
 ### RS-F3-006 — Streaming fallback safety
-- Status: `VERIFYING`
+- Status: `DONE`
 - Scope: conservative stream lifecycle with no automatic replay after stream exposure.
 - Implementation: stream wrapper records `stream_failed_before_output` or `stream_failed_after_partial`.
 - Acceptance: partial output is never silently duplicated by fallback.
 - Tests: `test_stream_failure_after_partial_output_is_terminal_and_traced`.
+
+### RS-F3-007 — Whole-request execution time budget
+- Status: `DONE`
+- Scope: `max_total_time` bounds routing plus all attempts/backoff, including the pre-attempt lifecycle.
+- Implementation: `RetryBudget` construction and explicit `budget_exhausted` terminal outcome in `g4f/rocksoul_execution.py`.
+- Acceptance: a request whose total budget is exhausted before the first provider call produces zero attempts and an explicit `budget_exhausted` outcome.
+- Tests: `test_total_time_budget_covers_entire_request_lifecycle`.
 
 ## F6 product CLI
 
@@ -68,8 +76,9 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 
 ### RS-F7-001 — Execution release matrix
 - Status: `VERIFYING`
-- Coverage: fallback ordering, taxonomy, bounded retries, cooldown, quarantine, recovery state machine, trace reconstruction, stream safety, CLI contracts.
-- Release requirement: current CI must be green before certification is marked complete.
+- Coverage: fallback ordering, taxonomy, bounded retries, cooldown, quarantine, recovery state machine, trace reconstruction, stream safety, lifecycle budget, CLI contracts.
+- Current evidence: Ubuntu ROCKSOUL CI unit tests pass all 37 tests on head `77845568ebeb25e963bf295e4adab1ba553968f2`.
+- Release requirement: current CI must be green on both Ubuntu and Windows before certification is marked complete.
 
 ## F8 documentation and productization
 
@@ -90,15 +99,15 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 
 ### RS-F5-001 — Arena benchmark plane
 - Status: `BLOCKED`
-- Dependency: stable execution traces and health feedback.
+- Dependency: stable execution traces and health feedback plus release certification.
 
 ## Definition of Product-Ready
 
 - F1 execution works through existing runtime provider implementations.
 - F2 persists every attempt and the final outcome.
-- F3 has deterministic taxonomy, bounded retries, explicit cooldown, quarantine, recovery, and safe streaming semantics.
+- F3 has deterministic taxonomy, bounded retries, explicit cooldown, quarantine, recovery, safe streaming semantics, and explicit whole-request time budgeting.
 - F6 CLI is documented and contract-tested.
-- F7 tests are offline by default and CI-certified.
+- F7 tests are offline by default and CI-certified on required platforms.
 - F8 docs use ROCKSOUL product terminology consistently.
 - No duplicate provider implementation exists.
 - F4/F5 are not enabled merely because scaffolding exists.
