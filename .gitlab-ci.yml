@@ -1,0 +1,57 @@
+# GitLab CI mirror pipeline for private/self-hosted engineering.
+# GitHub remains the primary OSS/release authority.
+# Shared GitLab runners are supported, but production-heavy jobs should use a self-hosted runner.
+
+stages:
+  - validate
+  - package
+
+variables:
+  UV_CACHE_DIR: .uv-cache
+  PYTHONUNBUFFERED: "1"
+
+cache:
+  key: "uv-${CI_COMMIT_REF_SLUG}"
+  paths:
+    - .uv-cache/
+
+validate:
+  stage: validate
+  image: python:3.13-slim
+  timeout: 15m
+  script:
+    - python -m pip install --no-cache-dir uv
+    - uv sync --frozen
+    - uv run python -c "import g4f, aiohttp; print('g4f:', g4f.__file__); print('aiohttp:', aiohttp.__version__)"
+    - uv run python -m unittest discover -s tests -v
+    - uv run rocksoul status
+    - uv run rocksoul discover
+    - uv run rocksoul health
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+package:
+  stage: package
+  image: python:3.13-slim
+  timeout: 10m
+  needs:
+    - validate
+  script:
+    - python -m pip install --no-cache-dir uv
+    - uv sync --frozen
+    - uv build
+  artifacts:
+    expire_in: 7 days
+    paths:
+      - dist/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Intentionally omitted from shared-runner pipelines:
+# - live provider probes
+# - Windows matrix
+# - scheduled fan-out
+# These can be attached to a tagged self-hosted runner later without spending
+# additional GitLab shared-runner compute minutes.
