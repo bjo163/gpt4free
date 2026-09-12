@@ -123,11 +123,19 @@ class ExecutionEngine:
             reasons.append("provider_allowlist")
         self.db.record_route(request.model, candidates, selected, reasons)
 
-    def _stream_wrap(self, request: ExecutionRequest, provider: str, response: Any, attempt_no: int, started_at: float):
+    def _stream_wrap(
+        self,
+        request: ExecutionRequest,
+        provider: str,
+        response: Any,
+        attempt_no: int,
+        started_at: float,
+        open_latency_ms: float,
+    ):
         try:
             iterator = iter(response)
-        except TypeError:
-            return response
+        except TypeError as exc:
+            raise ValueError("stream response is not iterable") from exc
 
         def generator():
             emitted = 0
@@ -135,6 +143,18 @@ class ExecutionEngine:
                 for chunk in iterator:
                     emitted += 1
                     yield chunk
+            except GeneratorExit:
+                finished = time.time()
+                latency_ms = max(0.0, (finished - started_at) * 1000.0)
+                self.trace.record_execution_attempt(
+                    request.request_id, attempt_no, provider, request.model,
+                    started_at, finished, latency_ms, "stream_abandoned", None, None, None,
+                )
+                self.trace.record_execution_run(
+                    request.request_id, request.model, started_at, finished,
+                    "stream_abandoned", provider, attempt_no, None,
+                )
+                raise
             except Exception as exc:
                 finished = time.time()
                 latency_ms = max(0.0, (finished - started_at) * 1000.0)
@@ -153,6 +173,19 @@ class ExecutionEngine:
                     status, provider, attempt_no, error_class,
                 )
                 raise
+            else:
+                finished = time.time()
+                self.trace.record_execution_attempt(
+                    request.request_id, attempt_no, provider, request.model,
+                    started_at, finished, open_latency_ms, "success", None, None, True,
+                )
+                self.trace.record_execution_evidence(
+                    provider, request.model, True, open_latency_ms,
+                )
+                self.trace.record_execution_run(
+                    request.request_id, request.model, started_at, finished,
+                    "success", provider, attempt_no, None,
+                )
         return generator()
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
@@ -204,13 +237,19 @@ class ExecutionEngine:
                 latency_ms = (time.monotonic() - monotonic_started) * 1000.0
                 if not self._response_valid(response):
                     raise ValueError("empty or invalid provider response")
-                exposed_response = self._stream_wrap(request, provider, response, attempt_no, started) if request.stream else response
+                if request.stream:
+                    exposed_response = self._stream_wrap(request, provider, response, attempt_no, started, latency_ms)
+                    attempt = ExecutionAttempt(attempt_no, provider, request.model, started, finished, latency_ms, "streaming", response_valid=None)
+                    attempts.append(attempt)
+                    self.trace.record_execution_attempt(request.request_id, attempt_no, provider, request.model, started, finished, latency_ms, "streaming", None, None, None)
+                    self.trace.record_execution_run(request.request_id, request.model, started_wall, None, "streaming", provider, len(attempts), None)
+                    return ExecutionResult(request.request_id, True, request.model, provider, response=exposed_response, attempts=tuple(attempts), outcome="streaming")
                 attempt = ExecutionAttempt(attempt_no, provider, request.model, started, finished, latency_ms, "success", response_valid=True)
                 attempts.append(attempt)
                 self.trace.record_execution_attempt(request.request_id, attempt_no, provider, request.model, started, finished, latency_ms, "success", None, None, True)
                 self.trace.record_execution_evidence(provider, request.model, True, latency_ms)
                 self.trace.record_execution_run(request.request_id, request.model, started_wall, time.time(), "success", provider, len(attempts), None)
-                return ExecutionResult(request.request_id, True, request.model, provider, response=exposed_response, attempts=tuple(attempts), outcome="success")
+                return ExecutionResult(request.request_id, True, request.model, provider, response=response, attempts=tuple(attempts), outcome="success")
             except Exception as exc:
                 finished = time.time()
                 latency_ms = (time.monotonic() - monotonic_started) * 1000.0
