@@ -60,26 +60,26 @@ RELEASE / EXPIRE / ISOLATE FAILURE
 
 **Coordinate** — assign work across trusted ROCKSOUL nodes using authenticated lifecycle state, capability-aware selection, bounded capacity leases, deterministic ordering, and per-node failure isolation.
 
-**Benchmark later** — Arena remains a separate future release gate so benchmarking cannot destabilize the certified execution and Mesh control planes.
+**Benchmark** — F5 now has a separately verified deterministic Arena foundation for immutable suite provenance, correctness scoring, persisted evidence, offline fixtures, and stable leaderboard semantics. Real production benchmark packs remain behind their own provenance and anti-contamination gate.
 
 ## Architecture boundary
 
 ```text
                      ROCKSOUL PRODUCT
-┌──────────────────────────────────────────────────┐
-│ Route • Policy • Execute • Trace • Health       │
-│ Recovery • CLI • Mesh Coordination • future API │
-└───────────────────────┬──────────────────────────┘
-                        │
-                  existing runtime
-                        │
-┌───────────────────────▼──────────────────────────┐
-│                g4f runtime layer                 │
-│ Client • provider adapters • transports          │
-└──────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ Route • Policy • Execute • Trace • Health • Recovery   │
+│ CLI • Mesh Coordination • Arena Benchmark • future API │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+                     existing runtime
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│                   g4f runtime layer                    │
+│            Client • provider adapters • transports     │
+└─────────────────────────────────────────────────────────┘
 ```
 
-ROCKSOUL does **not** replace or duplicate provider implementations. F3 provider lifecycle and F4 node lifecycle are separate failure domains.
+ROCKSOUL does **not** replace or duplicate provider implementations. F3 provider lifecycle, F4 node lifecycle, and F5 benchmark evidence are deliberately separate failure/authority domains.
 
 ## Current status
 
@@ -90,10 +90,12 @@ ROCKSOUL does **not** replace or duplicate provider implementations. F3 provider
 | F2 Trace | ✅ | Runs, attempts, route decisions, terminal execution evidence |
 | F3 Reliability | ✅ | Cooldown, retry bounds, quarantine, probing isolation, recovery, streaming integrity, hard total budget |
 | F4 Mesh | ✅ | Authenticated node lifecycle, capability/capacity routing, bounded leases, observability, failure isolation |
-| F5 Arena | 💤 | Deferred to its own benchmark/release gate |
+| F5 Arena | 🧪 Foundation | Deterministic provenance/scoring/storage/CLI/CI verified; production benchmark packs deferred |
 | F6 CLI | ✅ | JSON control-plane commands + routing contract coverage |
-| F7 Verification | ✅ | Offline regression matrix + Ubuntu/Windows ROCKSOUL and Mesh CI gates |
+| F7 Verification | ✅ | Offline regression matrix + Ubuntu/Windows ROCKSOUL, Mesh, and Arena gates |
 | F8 Product Docs | ✅ | Product docs, release gates, migration and compatibility boundary synchronized |
+
+The published production release remains **v0.2.0**, which certifies the execution + Mesh baseline. The F5 Arena foundation was merged later and does not retroactively expand the v0.2.0 release scope or imply a new version tag.
 
 ## Quick start
 
@@ -153,6 +155,21 @@ rocksoul-mesh events [--node <node>] [--limit <n>]
 
 Production deployments should provision **per-node secrets** through a secret manager using `ROCKSOUL_MESH_KEYS_JSON`. `ROCKSOUL_MESH_SECRET` is available for development compatibility. Node endpoints require HTTPS by default; local/private HTTP requires an explicit development override.
 
+## Arena foundation surface
+
+F5 exposes a separate `rocksoul-arena` command so benchmark evidence remains isolated from provider routing and Mesh coordination.
+
+```text
+rocksoul-arena status
+rocksoul-arena fixture [--target perfect|mixed|failing]
+rocksoul-arena fixture-manifest [--register]
+rocksoul-arena runs [--suite-digest <digest>] [--limit <n>]
+rocksoul-arena show <run-id>
+rocksoul-arena leaderboard [--suite-digest <digest>]
+```
+
+The built-in fixture is deterministic and offline. It proves the Arena methodology/storage/CLI contract; it does **not** claim live provider/model quality. The canonical F5 implementation is `g4f/rocksoul_arena.py`; legacy `rocksoul_platform.Arena` remains compatibility-only.
+
 ## Execution guarantees
 
 The certified execution baseline is designed around explicit bounds and traceable state:
@@ -187,6 +204,21 @@ F4 adds independent node-level coordination invariants:
 - lease TTL returns abandoned capacity;
 - repeated failures isolate only the failing node;
 - state transitions and leases are persisted as audit evidence.
+
+## Arena foundation guarantees
+
+F5 foundation adds independent benchmark invariants:
+
+- suite name/version and content-addressed SHA-256 identity;
+- immutable content under one `(name, version)` pair;
+- deterministic case ordering and explicit bounded weights;
+- deterministic `exact` / `json_exact` correctness evaluators;
+- failed executions remain visible as zero-score evidence;
+- latency is recorded as evidence but does not alter the default correctness score;
+- suite/run/per-case evidence is persisted in SQLite;
+- raw outputs are not retained by default; output digests are stored instead;
+- leaderboard uses each target's latest run instead of historical-best cherry-picking;
+- Arena cannot mutate F3 provider or F4 Mesh lifecycle state.
 
 ## Capability trust
 
@@ -230,6 +262,9 @@ Start here:
 - [`docs/rocksoul-execution-control-plane.md`](docs/rocksoul-execution-control-plane.md) — execution/retry/trace/recovery contracts.
 - [`docs/rocksoul-mesh.md`](docs/rocksoul-mesh.md) — F4 security, lifecycle, coordination, failure-boundary, and deployment contract.
 - [`docs/rocksoul-mesh-release-gate.md`](docs/rocksoul-mesh-release-gate.md) — independent F4 production gate.
+- [`docs/rocksoul-arena.md`](docs/rocksoul-arena.md) — F5 deterministic benchmark methodology and failure boundary.
+- [`docs/rocksoul-arena-release-gate.md`](docs/rocksoul-arena-release-gate.md) — F5 foundation verification + production benchmark-pack gate.
+- [`docs/rocksoul-v0.2-post-release-audit.md`](docs/rocksoul-v0.2-post-release-audit.md) — post-release truth audit and F5 handoff.
 - [`docs/rocksoul-todo.md`](docs/rocksoul-todo.md) — canonical granular backlog and acceptance evidence.
 - [`docs/rocksoul-release-gate.md`](docs/rocksoul-release-gate.md) — aggregate mandatory release checklist.
 - [`docs/rocksoul-release-certification.md`](docs/rocksoul-release-certification.md) — certified production scope.
@@ -248,23 +283,24 @@ Do not:
 - route Mesh work to non-`ACTIVE` nodes;
 - let node heartbeat claims overwrite control-plane lease capacity;
 - introduce infinite retry loops or unbounded leases;
-- hide failed attempts, leases, or lifecycle changes from traces/audit events;
+- hide failed attempts, leases, lifecycle changes, or benchmark failures from evidence;
 - double-count one stream attempt as multiple health outcomes;
 - use the compatibility-only legacy `MeshRegistry` as the canonical F4 coordinator;
-- enable Arena merely because legacy/future scaffolding exists;
-- describe unverified provider behavior as guaranteed support.
+- use compatibility-only `rocksoul_platform.Arena` as the canonical F5 benchmark authority;
+- let Arena benchmark results mutate production provider or Mesh lifecycle state;
+- describe unverified provider behavior or unqualified benchmark results as guaranteed support/quality.
 
 ## Testing philosophy
 
-ROCKSOUL tests are hermetic by default: temporary SQLite databases, fake clients, deterministic synthetic failures, and injected timing/randomness where needed. Live provider probing and real distributed node traffic belong in explicit integration/operator workflows.
+ROCKSOUL tests are hermetic by default: temporary SQLite databases, fake clients, deterministic synthetic failures, and injected timing/randomness where needed. Live provider probing, real distributed node traffic, and live benchmark packs belong in explicit integration/operator workflows.
 
-The required execution ROCKSOUL CI matrix runs on Ubuntu and Windows with Python 3.13 and includes package build validation. F4 additionally has a dedicated ROCKSOUL Mesh CI matrix on Ubuntu and Windows with deterministic core/CLI tests plus package build validation. The repository's general Unittest workflow remains an additional compatibility gate.
+The required execution ROCKSOUL CI matrix runs on Ubuntu and Windows with Python 3.13 and includes package build validation. F4 additionally has a dedicated ROCKSOUL Mesh CI matrix on Ubuntu and Windows. F5 foundation adds a dedicated ROCKSOUL Arena CI matrix with deterministic core/CLI tests, CLI smoke, and package build validation. The repository's general Unittest workflow remains an additional compatibility gate.
 
 ## Compatibility and legacy surface
 
 The package remains `gpt4free`/`g4f` for runtime compatibility while ROCKSOUL is the product/control-plane identity developed in this repository. Upstream runtime/provider implementations and ROCKSOUL-owned orchestration must remain clearly separated.
 
-The `rocksoul-legacy` entry point is compatibility-only. It is **not** the canonical routing or Mesh control-plane contract. Product provider routing is owned by `ExplainableRouter` and the `rocksoul` CLI; product Mesh coordination is owned by `g4f.rocksoul_mesh.MeshStore` and the `rocksoul-mesh` CLI. Legacy Arena scaffolding is not certified for the current release.
+The `rocksoul-legacy` entry point is compatibility-only. It is **not** the canonical routing, Mesh, or Arena control-plane contract. Product provider routing is owned by `ExplainableRouter` and the `rocksoul` CLI; product Mesh coordination is owned by `g4f.rocksoul_mesh.MeshStore` and the `rocksoul-mesh` CLI; the F5 benchmark foundation is owned by `g4f.rocksoul_arena.ArenaStore` and the `rocksoul-arena` CLI.
 
 Preserve accurate attribution, licensing, and compatibility information for the underlying runtime. ROCKSOUL should never imply ownership of upstream work it does not own.
 
