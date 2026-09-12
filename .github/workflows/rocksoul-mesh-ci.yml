@@ -1,0 +1,62 @@
+name: ROCKSOUL Mesh CI
+
+on:
+  pull_request:
+    paths:
+      - 'g4f/rocksoul_mesh.py'
+      - 'g4f/rocksoul_mesh_cli.py'
+      - 'tests/test_rocksoul_mesh*.py'
+      - 'docs/rocksoul-mesh*.md'
+      - 'docs/rocksoul-todo.md'
+      - 'docs/rocksoul-product-backlog.md'
+      - 'pyproject.toml'
+      - '.github/workflows/rocksoul-mesh-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'g4f/rocksoul_mesh.py'
+      - 'g4f/rocksoul_mesh_cli.py'
+      - 'tests/test_rocksoul_mesh*.py'
+      - 'docs/rocksoul-mesh*.md'
+      - 'docs/rocksoul-todo.md'
+      - 'docs/rocksoul-product-backlog.md'
+      - 'pyproject.toml'
+      - '.github/workflows/rocksoul-mesh-ci.yml'
+
+jobs:
+  mesh-tests:
+    name: ${{ matrix.os }} / Python 3.13
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync
+      - name: Compile Mesh modules
+        run: uv run python -m compileall -q g4f/rocksoul_mesh.py g4f/rocksoul_mesh_cli.py
+      - name: Run deterministic Mesh tests
+        run: uv run python -m unittest discover -s tests -p "test_rocksoul_mesh*.py" -v
+
+  package:
+    name: Build package
+    needs: mesh-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - name: Sync dependencies
+        run: uv sync
+      - name: Build wheel and source distribution
+        run: uv build
