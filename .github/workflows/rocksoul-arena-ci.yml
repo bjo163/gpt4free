@@ -5,6 +5,7 @@ on:
     paths:
       - 'g4f/rocksoul_arena.py'
       - 'g4f/rocksoul_arena_cli.py'
+      - 'g4f/rocksoul_arena_production.py'
       - 'tests/test_rocksoul_arena*.py'
       - 'docs/rocksoul-arena*.md'
       - 'docs/rocksoul-todo.md'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'g4f/rocksoul_arena.py'
       - 'g4f/rocksoul_arena_cli.py'
+      - 'g4f/rocksoul_arena_production.py'
       - 'tests/test_rocksoul_arena*.py'
       - 'docs/rocksoul-arena*.md'
       - 'docs/rocksoul-todo.md'
@@ -44,7 +46,7 @@ jobs:
       - name: Sync dependencies
         run: uv sync
       - name: Compile Arena modules
-        run: uv run python -m compileall -q g4f/rocksoul_arena.py g4f/rocksoul_arena_cli.py
+        run: uv run python -m compileall -q g4f/rocksoul_arena.py g4f/rocksoul_arena_cli.py g4f/rocksoul_arena_production.py
       - name: Run deterministic Arena tests
         run: uv run python -m unittest discover -s tests -p "test_rocksoul_arena*.py" -v
       - name: Smoke Arena CLI

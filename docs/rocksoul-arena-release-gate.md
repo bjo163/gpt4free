@@ -38,22 +38,39 @@ F5 Arena is certified independently from the execution and Mesh control planes. 
 - Exact PR head passed `ROCKSOUL Arena CI`, `ROCKSOUL Mesh CI`, `ROCKSOUL CI`, and general `Unittest` before merge.
 - Merge commit on `main`: `d3123a9ff8d00828d0043cd0bb3937cbc16dab8a`.
 - Post-merge `main` passed `ROCKSOUL Arena CI`, `ROCKSOUL Mesh CI`, `ROCKSOUL CI`, and general `Unittest` again.
-- The production-release workflow re-ran deterministic regression and package build successfully, detected that `v0.2.0` already existed, and correctly skipped duplicate tag/release creation.
 
-## Production benchmark-pack gate
+## Production evidence-contract gate
 
-The deterministic Arena foundation is verified, but a real benchmark pack must satisfy the following before it is advertised as authoritative for live provider/model quality:
+`g4f/rocksoul_arena_production.py` makes the evidence needed for a production benchmark structurally enforceable. A production pack/campaign must provide:
 
-- [ ] versioned source/dataset provenance;
-- [ ] evaluator version and scoring semantics;
-- [ ] public/held-out split policy where applicable;
-- [ ] contamination and leakage review procedure;
-- [ ] repeat-run and variance policy for non-deterministic targets;
-- [ ] environment/network requirements;
-- [ ] exact target identity and model/provider revision metadata.
+- [x] versioned dataset source and revision;
+- [x] SHA-256 dataset identity;
+- [x] evaluator revision;
+- [x] explicit public/held-out split policy;
+- [x] contamination/leakage review statement;
+- [x] bounded repeat-run policy and score-variance threshold;
+- [x] explicit environment requirements;
+- [x] explicit network requirements;
+- [x] exact provider/model/revision/runtime identity;
+- [x] persisted campaign evidence linking repeated Arena run IDs, scores, mean, standard deviation, and variance decision.
+
+The same production pack `(name, version)` is immutable. Changed evidence requires a version bump. A high-variance campaign remains persisted but is not accepted as stable production evidence.
+
+## Live production benchmark-pack activation gate
+
+The contract being implemented does **not** by itself certify a live provider/model benchmark pack. Before any live benchmark is advertised as authoritative, all of the following must be satisfied with real evidence:
+
+- [ ] actual benchmark dataset/source selected and versioned;
+- [ ] dataset digest verified from the exact evaluation artifact;
+- [ ] split policy applied to the real dataset where applicable;
+- [ ] contamination/leakage review completed for that dataset and evaluator;
+- [ ] exact live provider/model/revision/runtime identity captured;
+- [ ] environment and network evidence captured from the real execution environment;
+- [ ] repeated live campaign completed with variance inside the declared threshold;
+- [ ] final production-pack candidate passes Arena CI, ROCKSOUL CI, Mesh CI, general Unittest, and package build.
 
 ## Release decision
 
-The **F5 Arena foundation gate is GREEN** at `d3123a9ff8d00828d0043cd0bb3937cbc16dab8a`. This certifies the deterministic benchmark core, persistence contract, CLI, fixtures, and independent CI boundary.
+The **F5 Arena deterministic foundation is GREEN**. The production evidence contract is the next certification layer and is independently CI-gated.
 
-It does **not** certify broad live-provider/model benchmark claims and does not change the published `v0.2.0` production-release scope. Production benchmark packs remain `DEFERRED` until every benchmark-pack gate above is satisfied. No new version tag or production release is implied by foundation certification alone.
+No broad live-provider/model quality claim is certified until the live activation gate is fully satisfied. A production-contract implementation may merge to `main` without creating a new production release or changing the published live benchmark scope.
