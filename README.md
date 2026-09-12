@@ -2,14 +2,15 @@
 
 > **Control the route. Control the execution. Learn from every attempt.**
 
-ROCKSOUL is a multi-provider AI execution control plane built on top of an existing provider runtime. It makes model execution **routable, bounded, observable, explainable, and recoverable** without duplicating provider implementations.
+ROCKSOUL is a multi-provider AI execution control plane built on top of an existing g4f provider/runtime substrate. It makes model execution **routable, bounded, observable, explainable, and recoverable** without duplicating provider implementations.
 
-> **Runtime substrate:** g4f compatibility/runtime layer  
-> **Product layer:** ROCKSOUL control plane
+> **Runtime substrate:** g4f compatibility/provider layer  
+> **Product layer:** ROCKSOUL control plane  
+> **Current product runtime:** Python 3.13+
 
 ## What ROCKSOUL does
 
-ROCKSOUL takes a logical AI request and turns provider variability into one controlled execution path:
+ROCKSOUL turns a logical AI request into one controlled execution path:
 
 ```text
 REQUEST
@@ -31,23 +32,19 @@ RECOVER / RE-ADMIT
 
 ### Product pillars
 
-**Route** — rank eligible providers from model verification, capability evidence, health, latency, and deterministic ordering.
+**Route** — rank eligible providers from model verification, capability evidence, health, latency, lifecycle state, and deterministic ordering.
 
-**Execute** — use the existing runtime client and provider implementations with bounded fallback and retry policy.
+**Execute** — use existing runtime provider implementations with bounded fallback, retry policy, per-provider limits, and whole-request time budgets.
 
-**Learn** — feed real execution outcomes back into provider health evidence.
+**Learn** — feed terminal execution outcomes back into provider health evidence without double-counting streaming attempts.
 
 **Explain** — preserve why a candidate was accepted, rejected, or selected.
 
-**Recover** — quarantine unhealthy providers, probe recovery, and re-admit deliberately.
+**Recover** — quarantine unhealthy providers, isolate recovery probes from normal routing, and re-admit deliberately.
 
-**Scale later** — Mesh and Arena are separate phases so distributed coordination cannot destabilize the execution core.
+**Scale later** — Mesh and Arena remain separate future release gates so distributed coordination cannot destabilize the certified execution core.
 
-## Why this repository is changing
-
-This repository started from a g4f-based runtime. ROCKSOUL is now the product direction: the runtime remains the compatibility/execution substrate while ROCKSOUL becomes the operator-facing intelligence layer.
-
-We intentionally keep the architecture additive:
+## Architecture boundary
 
 ```text
                 ROCKSOUL PRODUCT
@@ -70,15 +67,15 @@ ROCKSOUL does **not** replace or duplicate provider implementations.
 
 | Phase | Status | Notes |
 |---|---|---|
-| F0 Guardrails | ✅ | Core boundaries established |
-| F1 Execution | ✅ | Contracts + bounded provider fallback |
-| F2 Trace | ✅ | Runs, attempts, route decisions, execution evidence |
-| F3 Reliability | 🟡 | Cooldown/quarantine/recovery/retry/streaming gates remain |
-| F4 Mesh | ⛔ | Blocked by F3 release gate |
-| F5 Arena | ⛔ | Blocked until execution evidence is stable |
-| F6 CLI/API | 🟡 | CLI exists; full contract suite pending |
-| F7 Verification | 🟡 | Expanding offline release matrix |
-| F8 Product Docs | ✅ | Product docs/backlog refreshed |
+| F0 Guardrails | ✅ | Runtime boundary, request identity, hermetic unit-test rule |
+| F1 Execution | ✅ | Deterministic contracts + bounded provider fallback |
+| F2 Trace | ✅ | Runs, attempts, route decisions, terminal execution evidence |
+| F3 Reliability | ✅ | Cooldown, retry bounds, quarantine, probing isolation, recovery, streaming integrity, hard total budget |
+| F4 Mesh | 💤 | Deferred to its own release/security/observability gate |
+| F5 Arena | 💤 | Deferred to its own benchmark/release gate |
+| F6 CLI | ✅ | JSON control-plane commands + routing contract coverage |
+| F7 Verification | ✅ | Offline regression matrix + Ubuntu/Windows ROCKSOUL CI gate |
+| F8 Product Docs | ✅ | Product docs, release gate, migration and compatibility boundary synchronized |
 
 ## Quick start
 
@@ -110,11 +107,11 @@ rocksoul health [provider]
 rocksoul provider <name>
 rocksoul probe <provider>
 rocksoul verify <provider>
-rocksoul route <model>
-rocksoul route-explain <model>
+rocksoul route <model> [--verified-only] [capability flags]
+rocksoul route-explain <model> [capability flags]
 rocksoul execute <model> <message>
 rocksoul trace <request_id>
-rocksoul quarantine <provider>   # planned release-gate command
+rocksoul quarantine <provider>
 rocksoul recover [--provider <provider>]
 ```
 
@@ -122,16 +119,20 @@ Provider probes can require network access, credentials, cookies, or provider-sp
 
 ## Execution guarantees
 
-Every execution is designed around explicit bounds:
+The certified baseline is designed around explicit bounds and traceable state:
 
 - unique `request_id`;
-- maximum attempt count;
-- maximum total execution time;
-- per-provider retry limits;
+- maximum global attempt count;
+- maximum same-provider attempt count;
+- whole-request execution budget;
+- in-flight provider timeout clipped to the remaining whole-request budget;
 - bounded backoff/jitter;
 - deterministic error taxonomy;
 - persisted attempt history;
-- explicit terminal outcome.
+- explicit cooldown/quarantine/recovery lifecycle;
+- `PROBING` isolation from normal traffic;
+- one terminal health signal per streaming attempt;
+- explicit terminal or active-stream outcome.
 
 The system must never retry forever.
 
@@ -141,15 +142,19 @@ Provider capabilities are treated as evidence levels:
 
 `DECLARED → DETECTED → VERIFIED`
 
-A required capability is not satisfied merely because a provider declares support.
+A required capability is not satisfied merely because a provider declares support. `route --verified-only` remains enforced even when capability filters are combined with the route request.
 
-## Reliability model
+## Reliability lifecycle
 
-The target lifecycle is:
+```text
+ACTIVE → DEGRADED → QUARANTINED → PROBING → RE_ADMITTED
+```
 
-`ACTIVE → DEGRADED → QUARANTINED → PROBING → RE_ADMITTED`
+`PROBING` is recovery-only state. It is deliberately excluded from normal request routing until explicit re-admission.
 
-Actual execution outcomes and controlled probes are both part of the health signal.
+## Streaming contract
+
+Once a stream is exposed to the caller, ROCKSOUL does not silently replay it after partial output. A stream is persisted as `streaming` while active, then becomes success, failure, or abandonment. Health evidence is recorded only at terminal success/failure so one broken stream is not counted as both a success and a failure.
 
 ## Documentation
 
@@ -157,9 +162,11 @@ Start here:
 
 - [`docs/rocksoul-product.md`](docs/rocksoul-product.md) — product identity and architecture.
 - [`docs/rocksoul-execution-control-plane.md`](docs/rocksoul-execution-control-plane.md) — execution/retry/trace/recovery contracts.
-- [`docs/rocksoul-todo.md`](docs/rocksoul-todo.md) — granular implementation backlog and acceptance criteria.
-- [`docs/rocksoul-intelligence.md`](docs/rocksoul-intelligence.md) — routing, capability, health, and recovery foundations.
-- [`docs/README.md`](docs/README.md) — documentation index.
+- [`docs/rocksoul-todo.md`](docs/rocksoul-todo.md) — canonical granular backlog and acceptance evidence.
+- [`docs/rocksoul-release-gate.md`](docs/rocksoul-release-gate.md) — mandatory release checklist.
+- [`docs/rocksoul-release-certification.md`](docs/rocksoul-release-certification.md) — certified baseline scope.
+- [`docs/rocksoul-cli.md`](docs/rocksoul-cli.md) — product CLI contract.
+- [`docs/ROCKSOUL-MIGRATION.md`](docs/ROCKSOUL-MIGRATION.md) — standalone migration plan.
 
 ## Development rules
 
@@ -168,19 +175,25 @@ Changes should be small, testable, and traceable to a product requirement.
 Do not:
 
 - duplicate provider implementations inside ROCKSOUL;
-- bypass capability verification when a capability is required;
+- bypass capability/model verification constraints requested by the caller;
+- route normal requests to `QUARANTINED` or `PROBING` providers;
 - introduce infinite retry loops;
 - hide failed attempts from execution traces;
-- start Mesh/Arena before the F1-F3 reliability gates are green;
+- double-count one stream attempt as multiple health outcomes;
+- enable Mesh/Arena merely because legacy/future scaffolding exists;
 - describe unverified provider behavior as guaranteed support.
 
 ## Testing philosophy
 
 ROCKSOUL tests are hermetic by default: temporary SQLite databases, fake clients, deterministic synthetic failures, and injected timing/randomness where needed. Live provider probing belongs in explicit integration/operator workflows.
 
-## Compatibility and attribution
+The required ROCKSOUL CI matrix runs on Ubuntu and Windows with Python 3.13 and includes package build validation.
+
+## Compatibility and legacy surface
 
 The package remains `gpt4free`/`g4f` for runtime compatibility while ROCKSOUL is the product/control-plane identity developed in this repository. Upstream runtime/provider implementations and ROCKSOUL-owned orchestration must remain clearly separated.
+
+The `rocksoul-legacy` entry point is compatibility-only. It is **not** the canonical routing/control-plane contract and does not certify legacy Mesh/Arena scaffolding for the current release. Product routing is owned by `ExplainableRouter` and the `rocksoul` CLI.
 
 Preserve accurate attribution, licensing, and compatibility information for the underlying runtime. ROCKSOUL should never imply ownership of upstream work it does not own.
 
