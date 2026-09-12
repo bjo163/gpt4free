@@ -1,6 +1,6 @@
 # ROCKSOUL F5 Arena Release Gate
 
-F5 Arena is certified independently from the execution and Mesh control planes. The existence of legacy benchmark helpers or an offline fixture does not make Arena production-ready.
+F5 Arena is certified independently from the execution and Mesh control planes. The existence of legacy benchmark helpers or an offline fixture does not make a real provider/model benchmark pack production-authoritative.
 
 ## Mandatory architecture gate
 
@@ -20,30 +20,40 @@ F5 Arena is certified independently from the execution and Mesh control planes. 
 - [x] Leaderboard uses the latest run per target rather than historical best-run selection.
 - [x] Offline repository fixture has explicit provenance and no network dependency.
 
-## Mandatory verification gate
+## Mandatory foundation verification gate
 
-- [ ] `ROCKSOUL Arena CI` passes on Ubuntu / Python 3.13.
-- [ ] `ROCKSOUL Arena CI` passes on Windows / Python 3.13.
-- [ ] Arena core unit tests pass.
-- [ ] Arena CLI contract tests pass.
-- [ ] `rocksoul-arena` smoke fixture passes.
-- [ ] package wheel + source distribution build succeeds.
-- [ ] existing `ROCKSOUL CI` remains green on the final candidate.
-- [ ] existing `ROCKSOUL Mesh CI` remains green when applicable.
-- [ ] general repository `Unittest` remains green on the final candidate.
+- [x] `ROCKSOUL Arena CI` passes on Ubuntu / Python 3.13.
+- [x] `ROCKSOUL Arena CI` passes on Windows / Python 3.13.
+- [x] Arena core unit tests pass.
+- [x] Arena CLI contract tests pass.
+- [x] `rocksoul-arena` smoke fixture passes.
+- [x] package wheel + source distribution build succeeds.
+- [x] existing `ROCKSOUL CI` remains green on the final candidate.
+- [x] existing `ROCKSOUL Mesh CI` remains green on the final candidate.
+- [x] general repository `Unittest` remains green on the final candidate.
+
+### Foundation certification evidence
+
+- PR #17 exact head: `10d16d58b6257396acd7dad00d614f3ac31e46a3`.
+- Exact PR head passed `ROCKSOUL Arena CI`, `ROCKSOUL Mesh CI`, `ROCKSOUL CI`, and general `Unittest` before merge.
+- Merge commit on `main`: `d3123a9ff8d00828d0043cd0bb3937cbc16dab8a`.
+- Post-merge `main` passed `ROCKSOUL Arena CI`, `ROCKSOUL Mesh CI`, `ROCKSOUL CI`, and general `Unittest` again.
+- The production-release workflow re-ran deterministic regression and package build successfully, detected that `v0.2.0` already existed, and correctly skipped duplicate tag/release creation.
 
 ## Production benchmark-pack gate
 
-The foundation may merge without claiming broad live-model quality certification. Before a real benchmark pack is advertised as authoritative, it must additionally define:
+The deterministic Arena foundation is verified, but a real benchmark pack must satisfy the following before it is advertised as authoritative for live provider/model quality:
 
-- versioned source/dataset provenance;
-- evaluator version and scoring semantics;
-- public/held-out split policy where applicable;
-- contamination and leakage review procedure;
-- repeat-run and variance policy for non-deterministic targets;
-- environment/network requirements;
-- target identity and model/provider revision metadata.
+- [ ] versioned source/dataset provenance;
+- [ ] evaluator version and scoring semantics;
+- [ ] public/held-out split policy where applicable;
+- [ ] contamination and leakage review procedure;
+- [ ] repeat-run and variance policy for non-deterministic targets;
+- [ ] environment/network requirements;
+- [ ] exact target identity and model/provider revision metadata.
 
 ## Release decision
 
-Until all mandatory final-head verification boxes are green, F5 status is **VERIFYING / FOUNDATION**, not production-certified Arena. Any future F5 production release must record the exact commit and workflow evidence that satisfied this checklist.
+The **F5 Arena foundation gate is GREEN** at `d3123a9ff8d00828d0043cd0bb3937cbc16dab8a`. This certifies the deterministic benchmark core, persistence contract, CLI, fixtures, and independent CI boundary.
+
+It does **not** certify broad live-provider/model benchmark claims and does not change the published `v0.2.0` production-release scope. Production benchmark packs remain `DEFERRED` until every benchmark-pack gate above is satisfied. No new version tag or production release is implied by foundation certification alone.

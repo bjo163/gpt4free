@@ -4,11 +4,12 @@
 
 ## Product identity
 
-ROCKSOUL is the product/control-plane layer built on top of the existing g4f runtime. The runtime remains the provider execution substrate. ROCKSOUL owns routing intelligence, execution policy, health evidence, traceability, recovery, Mesh coordination, and product-facing interfaces. ROCKSOUL does not duplicate provider implementations.
+ROCKSOUL is the product/control-plane layer built on top of the existing g4f runtime. The runtime remains the provider execution substrate. ROCKSOUL owns routing intelligence, execution policy, health evidence, traceability, recovery, Mesh coordination, Arena benchmarking, and product-facing interfaces. ROCKSOUL does not duplicate provider implementations.
 
 ## Status legend
 
 - `DONE` implemented and verified by automated tests
+- `FOUNDATION` implemented and verification-gated core exists, while broader production benchmark packs remain deferred
 - `VERIFYING` implemented; awaiting current CI certification
 - `BLOCKED` intentionally waiting on another phase gate
 - `DEFERRED` outside the current release and moved to its own future gate
@@ -134,10 +135,11 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 - Tests: `tests/test_rocksoul_mesh_cli.py` plus Mesh status/event assertions.
 
 ### RS-F4-009 — Independent Mesh release gate
-- Status: `DONE subject to final-candidate CI`
+- Status: `DONE`
 - Scope: dedicated F4 CI/release contract independent of legacy Mesh/Arena scaffolding.
 - Acceptance: Mesh CI must pass Ubuntu/Windows Python 3.13 deterministic core+CLI tests and package build; final `main` candidate must also pass existing ROCKSOUL CI and general Unittest.
 - Workflow: `.github/workflows/rocksoul-mesh-ci.yml`.
+- Evidence: F4 shipped in `v0.2.0` from final candidate `f0db58677386c0e5a661d9816d696d91cced2b9f`; Mesh CI, ROCKSOUL CI, general Unittest, and production release workflow passed.
 
 ## F6 product CLI
 
@@ -161,9 +163,10 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 - Release requirement: required Ubuntu and Windows ROCKSOUL CI must be green on the final release candidate.
 
 ### RS-F7-002 — Mesh release matrix
-- Status: `DONE subject to final-candidate CI`
+- Status: `DONE`
 - Coverage: Mesh auth/replay, node identity, endpoint security, lifecycle, capability/capacity routing, lease idempotency/expiry, failure isolation, audit events, and operator CLI.
 - Release requirement: dedicated Mesh CI plus existing ROCKSOUL CI and general Unittest must be green on the final release candidate.
+- Evidence: satisfied by the published `v0.2.0` production candidate and revalidated after F5 foundation merge.
 
 ## F8 documentation and productization
 
@@ -180,12 +183,46 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 - Status: `DONE`
 - Docs: `docs/rocksoul-mesh.md`, `docs/rocksoul-mesh-release-gate.md`.
 
-## F5 future gate
+## F5 Arena benchmark plane
 
-### RS-F5-001 — Arena benchmark plane
+### RS-F5-001 — Canonical Arena foundation
+- Status: `FOUNDATION`
+- Scope: canonical F5 benchmark authority independent from legacy `rocksoul_platform.Arena`, F3 provider lifecycle, and F4 Mesh lifecycle.
+- Implementation: `g4f/rocksoul_arena.py`.
+- Acceptance: benchmark execution cannot mutate production provider routing/health or Mesh node/lease state.
+- Tests: `tests/test_rocksoul_arena.py`.
+
+### RS-F5-002 — Immutable suite provenance
+- Status: `FOUNDATION`
+- Scope: canonical suite manifests, explicit versioning, SHA-256 identity, deterministic case ordering, and immutable `(name, version)` content.
+- Acceptance: changed benchmark content under the same name/version fails closed and requires a version bump.
+- Tests: stable digest and immutable-version regressions in `tests/test_rocksoul_arena.py`.
+
+### RS-F5-003 — Deterministic scoring and persistent evidence
+- Status: `FOUNDATION`
+- Scope: weighted deterministic correctness, explicit execution-error evidence, output digests, latency evidence, and SQLite persistence for suites/runs/results.
+- Acceptance: correctness ranking is deterministic; latency is evidence-only and does not silently alter the default score.
+- Tests: scoring, persistence, execution-failure, and leaderboard coverage.
+
+### RS-F5-004 — Arena operator CLI
+- Status: `FOUNDATION`
+- Scope: JSON-oriented `rocksoul-arena` operator surface.
+- Commands: `status`, `fixture`, `fixture-manifest`, `runs`, `show`, `leaderboard`.
+- Acceptance: offline fixture targets can verify perfect, mixed, and explicit failing behavior without live provider/network dependencies.
+- Tests: `tests/test_rocksoul_arena_cli.py`.
+
+### RS-F5-005 — Independent Arena CI and methodology gate
+- Status: `FOUNDATION`
+- Scope: independent Arena methodology, release gate, Ubuntu/Windows CI, CLI smoke, and package build validation.
+- Docs: `docs/rocksoul-arena.md`, `docs/rocksoul-arena-release-gate.md`.
+- Workflow: `.github/workflows/rocksoul-arena-ci.yml`.
+- Evidence: PR #17 exact head `10d16d58b6257396acd7dad00d614f3ac31e46a3` passed Arena CI, Mesh CI, ROCKSOUL CI, and general Unittest; merged as `d3123a9ff8d00828d0043cd0bb3937cbc16dab8a`, whose post-merge Arena/Mesh/ROCKSOUL/Unittest workflows also passed.
+
+### RS-F5-006 — Production benchmark packs
 - Status: `DEFERRED`
-- Foundation dependency: stable execution traces, provider health, Mesh coordination, and release certification satisfied.
-- Rule: Arena remains outside the certified product until its own deterministic benchmark methodology, provenance, anti-gaming, and release contract is implemented.
+- Scope: authoritative live provider/model benchmark packs beyond the deterministic repository fixture.
+- Required before activation: versioned source/dataset provenance, evaluator revision, public/held-out policy where applicable, contamination/leakage review, repeat-run variance policy, environment/network requirements, and exact target/provider/model revision metadata.
+- Rule: the F5 foundation being green does not by itself certify broad live-model quality claims or create a new production release.
 
 ## Definition of Product-Ready v0.2 Baseline
 
@@ -198,4 +235,5 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 - F8 docs use ROCKSOUL product terminology consistently.
 - No duplicate provider implementation exists.
 - Legacy `MeshRegistry` remains compatibility-only; it is not the canonical F4 path.
-- F5 Arena is not enabled merely because legacy/future scaffolding exists.
+- F5 Arena foundation may exist on `main` without changing the published `v0.2.0` release scope.
+- Legacy `rocksoul_platform.Arena` remains compatibility-only; canonical F5 authority is `g4f/rocksoul_arena.py`.
