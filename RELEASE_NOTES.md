@@ -1,3 +1,31 @@
+# ROCKSOUL v0.2.1 — CI Hardening & Engineering Mirror
+
+ROCKSOUL v0.2.1 is a maintenance release following the production-certified v0.2.0 Mesh release.
+
+## Included
+
+- Harden scheduled ROCKSOUL live-provider probe execution against CI wall-clock cancellation.
+- Increase the scheduled intelligence workflow timeout from 20 to 30 minutes.
+- Increase live probe concurrency from 4 to 8 while preserving a 20-second per-provider probe timeout.
+- Add a GitLab CI mirror contract for private/self-hosted engineering workflows.
+- Keep GitLab shared-runner work limited to deterministic validation and package build; live provider probes, Windows coverage, and scheduled fan-out remain reserved for future self-hosted runner lanes.
+- Preserve GitHub as the primary public OSS and release authority.
+
+## Verification
+
+- ROCKSOUL CI — Ubuntu / Python 3.13: PASS.
+- ROCKSOUL CI — Windows / Python 3.13: PASS.
+- ROCKSOUL CLI smoke: PASS.
+- ROCKSOUL package build: PASS.
+- General Unittest workflow: PASS.
+- AI Code Reviewer: PASS.
+
+## Release boundary
+
+v0.2.1 does not expand the certified product scope into F5 production benchmark certification. F5 Arena remains a verified deterministic foundation; live production benchmark packs remain behind their own provenance, reproducibility, and anti-contamination gate.
+
+---
+
 # ROCKSOUL v0.2.0 — Mesh Coordination
 
 ROCKSOUL v0.2.0 adds the first production-certified distributed coordination plane on top of the v0.1.0 execution-control foundation.
