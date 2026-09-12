@@ -56,14 +56,14 @@ F4 becomes production-ready only when every mandatory implementation item is sat
 
 ## Verification gates — final candidate
 
-These boxes are intentionally left pending until the exact certification-PR head has completed. They are updated only after the final-head runs succeed; changing this file then creates a new head that must be verified once more before merge.
+The integration candidate `922747ad1fa7da69a572dda235244ea616bd50ff` passed all required final-candidate workflows before this evidence-only update. Because recording that evidence creates a new head, the updated head must also be green on the same mandatory workflows before merge.
 
-- [ ] Core + CLI Mesh tests are green on final-head Ubuntu / Python 3.13.
-- [ ] Core + CLI Mesh tests are green on final-head Windows / Python 3.13.
-- [ ] Final-head Mesh wheel/source-distribution build is green.
-- [ ] Final-head existing ROCKSOUL CI is green on Ubuntu / Python 3.13.
-- [ ] Final-head existing ROCKSOUL CI is green on Windows / Python 3.13.
-- [ ] Final-head general repository Unittest workflow is green.
+- [x] Core + CLI Mesh tests are green on final-head Ubuntu / Python 3.13.
+- [x] Core + CLI Mesh tests are green on final-head Windows / Python 3.13.
+- [x] Final-head Mesh wheel/source-distribution build is green.
+- [x] Final-head existing ROCKSOUL CI is green on Ubuntu / Python 3.13.
+- [x] Final-head existing ROCKSOUL CI is green on Windows / Python 3.13.
+- [x] Final-head general repository Unittest workflow is green.
 
 ## Compatibility gate
 
@@ -85,4 +85,4 @@ These environment-specific activation boxes do not block publishing the software
 
 ## Certification rule
 
-Do not merge F4 to `main` or cut the v0.2.0 production release while any final-candidate verification box is false or any mandatory final-head CI gate is red. The production release workflow must then re-run deterministic regression tests and package build before creating the immutable version tag and GitHub Release artifacts.
+Do not merge F4 to `main` or cut the v0.2.0 production release while any mandatory final-head CI gate is red. The production release workflow must then re-run deterministic regression tests and package build before creating the immutable version tag and GitHub Release artifacts.
