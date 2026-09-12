@@ -154,7 +154,7 @@ class ExecutionEngine:
         provider_attempts: dict[str, int] = {}
         budget = RetryBudget(
             max_attempts=max(1, request.max_attempts),
-            max_total_time=max(0.1, request.max_total_time),
+            max_total_time=max(0.0, request.max_total_time),
             max_same_provider_attempts=max(1, request.max_same_provider_attempts),
         )
         self.trace.record_execution_run(request.request_id, request.model, started_wall, None, "running", None, 0, None)
@@ -231,8 +231,11 @@ class ExecutionEngine:
                     current_provider = None
 
         last = attempts[-1] if attempts else None
-        self.trace.record_execution_run(request.request_id, request.model, started_wall, time.time(), "exhausted", last.provider if last else None, len(attempts), last.error_class if last else None)
-        return ExecutionResult(request.request_id, False, request.model, last.provider if last else None, attempts=tuple(attempts), outcome="exhausted", error_class=last.error_class if last else "exhausted", error=last.error if last else "No provider succeeded")
+        outcome = "budget_exhausted" if last is None or time.monotonic() - started_total >= budget.max_total_time else "exhausted"
+        error_class = "budget_exhausted" if outcome == "budget_exhausted" else (last.error_class if last else "exhausted")
+        error = "Execution total-time budget exhausted before a provider attempt" if last is None and outcome == "budget_exhausted" else (last.error if last else "No provider succeeded")
+        self.trace.record_execution_run(request.request_id, request.model, started_wall, time.time(), outcome, last.provider if last else None, len(attempts), error_class)
+        return ExecutionResult(request.request_id, False, request.model, last.provider if last else None, attempts=tuple(attempts), outcome=outcome, error_class=error_class, error=error)
 
     def route_explain(self, model: str, requirements: Sequence[str] = ()) -> list[dict[str, Any]]:
         return ExplainableRouter(self.db).explain(model, [CapabilityRequirement(name) for name in requirements])
