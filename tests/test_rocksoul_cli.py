@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from g4f.rocksoul_db import RocksoulDB
+
 
 class RocksoulCliContractTests(unittest.TestCase):
     def run_cli(self, *args: str, root: str) -> subprocess.CompletedProcess[str]:
@@ -49,6 +51,26 @@ class RocksoulCliContractTests(unittest.TestCase):
             result = self.run_cli("route-explain", "synthetic-model", root=root)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), [])
+
+    def test_route_verified_only_is_preserved_with_capability_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            db_path = Path(root) / "ROCKSOUL" / "g4f" / "rocksoul.db"
+            db = RocksoulDB(db_path)
+            for name, verified, latency in (("UnverifiedFast", False, 1.0), ("VerifiedSlower", True, 50.0)):
+                db.upsert_provider(name, "https://example.test", True, True, False)
+                db.bind_model(name, "demo", verified=verified)
+                db.set_capability(name, "streaming", True, True, True, model="demo")
+                db.record_probe(name, "smoke", True, latency, model="demo")
+
+            unrestricted = self.run_cli("route", "demo", "--streaming", root=root)
+            self.assertEqual(unrestricted.returncode, 0, unrestricted.stderr)
+            self.assertEqual(json.loads(unrestricted.stdout)["provider"], "UnverifiedFast")
+
+            verified_only = self.run_cli("route", "demo", "--streaming", "--verified-only", root=root)
+            self.assertEqual(verified_only.returncode, 0, verified_only.stderr)
+            payload = json.loads(verified_only.stdout)
+            self.assertEqual(payload["provider"], "VerifiedSlower")
+            self.assertTrue(payload["model_verified"])
 
 
 if __name__ == "__main__":
