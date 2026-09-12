@@ -81,15 +81,19 @@ class LiveProbe:
         if probe_type not in {"smoke", "stream"}:
             raise ValueError(f"Unsupported probe type: {probe_type}")
         started = time.perf_counter()
+        stream = probe_type == "stream"
         ok = False
         valid = False
         error_class: str | None = None
         error: str | None = None
         status_code: int | None = None
         try:
-            provider_handler = self._provider(provider)
-            client = (client_factory or (lambda p: self._default_client(p)))(provider_handler)
-            stream = probe_type == "stream"
+            if client_factory is not None:
+                provider_handler = provider
+                client = client_factory(provider_handler)
+            else:
+                provider_handler = self._provider(provider)
+                client = self._default_client(provider_handler)
             request_timeout = max(1.0, float(timeout))
             result = client.chat.completions.create(
                 model=model,

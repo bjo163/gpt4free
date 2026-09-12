@@ -10,8 +10,13 @@ class TestGetLastProvider(unittest.TestCase):
     def test_get_latest_version(self):
         current_version = g4f.version.utils.current_version
         if current_version is not None:
-            self.assertIsInstance(g4f.version.utils.current_version, str)
+            self.assertIsInstance(current_version, str)
         try:
-            self.assertIsInstance(g4f.version.utils.latest_version, str)
+            latest_version = g4f.version.utils.latest_version
         except VersionNotFoundError:
-            pass
+            return
+        # The version endpoint may be unavailable in CI/offline environments.
+        # Treat an unavailable value like VersionNotFoundError rather than making
+        # the entire suite network-dependent.
+        if latest_version is not None:
+            self.assertIsInstance(latest_version, str)

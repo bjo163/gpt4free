@@ -17,6 +17,23 @@ ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ROCKSOUL" / "g4
 DB_PATH = ROOT / "rocksoul.db"
 SCHEMA_VERSION = 2
 
+
+class _ClosingConnection(sqlite3.Connection):
+    """Connection whose context manager also closes the handle.
+
+    sqlite3.Connection.__exit__ commits/rolls back but intentionally does not
+    close the connection. ROCKSOUL uses ``with db.connect()`` extensively, so
+    closing here prevents SQLite handles from leaking across Windows tests and
+    production short-lived commands.
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderHealth:
     provider: str
@@ -42,6 +59,7 @@ class ProviderHealth:
         penalty = min(self.consecutive_failures * 5.0, 25.0)
         return max(0.0, min(100.0, reliability + latency - penalty))
 
+
 @dataclass(frozen=True, slots=True)
 class RouteCandidate:
     provider: str
@@ -49,6 +67,7 @@ class RouteCandidate:
     model_verified: bool
     health_score: float
     avg_latency_ms: float | None
+
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -92,6 +111,7 @@ CREATE INDEX IF NOT EXISTS idx_probe_model_time ON probe_runs(model_id, finished
 CREATE INDEX IF NOT EXISTS idx_health_provider_time ON health_snapshots(provider_id, created_at DESC);
 """
 
+
 class RocksoulDB:
     def __init__(self, path: Path = DB_PATH) -> None:
         self.path = Path(path)
@@ -99,7 +119,7 @@ class RocksoulDB:
         self._initialize()
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=10.0)
+        conn = sqlite3.connect(self.path, timeout=10.0, factory=_ClosingConnection)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
@@ -203,6 +223,12 @@ class RocksoulDB:
         with self.connect() as conn:
             conn.execute("INSERT INTO health_snapshots(provider_id,attempts,successes,failures,avg_latency_ms,p95_latency_ms,score,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)", (pid,current.attempts,current.successes,current.failures,current.avg_latency_ms,current.p95_latency_ms,current.score,status,time.time()))
             conn.execute("UPDATE providers SET status=?,updated_at=? WHERE id=?", (status,time.time(),pid))
+        if current.consecutive_failures >= 3:
+            from .rocksoul_control import ProviderControlStore
+            control = ProviderControlStore(self)
+            state = control.get(provider)
+            if state.state not in {"QUARANTINED", "PROBING"}:
+                control.quarantine(provider, f"failure_streak:{current.consecutive_failures}")
 
     def route_candidates(self, model: str, providers: Sequence[str] | None = None, verified_only: bool = False, capabilities: Sequence[str] | None = None) -> list[RouteCandidate]:
         model_id = self.upsert_model(model)
@@ -213,9 +239,16 @@ class RocksoulDB:
         if verified_only: sql += " AND pm.verified=1"
         with self.connect() as conn: rows = conn.execute(sql, params).fetchall()
         result=[]
+        from .rocksoul_control import ProviderControlStore
+        control = ProviderControlStore(self)
+        now = time.time()
         for row in rows:
-            name=row["name"]; health=self.health(name)
-            if health.cooldown_until > time.time(): continue
+            name=row["name"]
+            lifecycle = control.get(name)
+            if lifecycle.blocked:
+                continue
+            health=self.health(name)
+            if health.cooldown_until > now: continue
             if capabilities:
                 with self.connect() as conn:
                     for cap in capabilities:
@@ -257,32 +290,48 @@ class RocksoulDB:
             except (OSError,ValueError,TypeError): pass
         return imported
 
+
 class DBRouter:
-    def __init__(self, db: RocksoulDB | None = None) -> None: self.db=db or RocksoulDB()
+    def __init__(self, db: RocksoulDB | None = None) -> None:
+        self.db=db or RocksoulDB()
+
     def select(self, model: str, providers: Sequence[str] | None = None, capabilities: Sequence[str] | None = None) -> RouteCandidate | None:
-        candidates=self.db.route_candidates(model,providers,capabilities=capabilities); selected=candidates[0] if candidates else None
+        candidates=self.db.route_candidates(model,providers,capabilities=capabilities)
+        selected=candidates[0] if candidates else None
         reasons=["model_verified","health_score","latency_score"]+[f"capability:{x}" for x in (capabilities or ())]
-        self.db.record_route(model,candidates,selected.provider if selected else None,reasons); return selected
+        self.db.record_route(model,candidates,selected.provider if selected else None,reasons)
+        return selected
+
 
 def discover() -> int:
     from .Provider import ProviderLoader
     db=RocksoulDB(); count=0
-    for name in ProviderLoader.names: db.upsert_provider(name); count+=1
+    for name in ProviderLoader.names:
+        db.upsert_provider(name)
+        count+=1
     return count
 
-def migrate() -> dict[str,int]: return RocksoulDB().migrate_legacy_json()
+
+def migrate() -> dict[str,int]:
+    return RocksoulDB().migrate_legacy_json()
+
 
 def main() -> None:
-    parser=argparse.ArgumentParser(description="ROCKSOUL SQLite intelligence engine"); sub=parser.add_subparsers(dest="command",required=True)
+    parser=argparse.ArgumentParser(description="ROCKSOUL SQLite intelligence engine")
+    sub=parser.add_subparsers(dest="command",required=True)
     sub.add_parser("discover"); sub.add_parser("migrate")
     health=sub.add_parser("health"); health.add_argument("provider",nargs="?")
     route=sub.add_parser("route"); route.add_argument("model"); route.add_argument("--verified-only",action="store_true"); route.add_argument("--capability",action="append")
-    status=sub.add_parser("status")
+    sub.add_parser("status")
     args=parser.parse_args(); db=RocksoulDB()
     if args.command=="discover": print(json.dumps({"providers":discover(),"db":str(db.path)},indent=2))
     elif args.command=="migrate": print(json.dumps({"migrated":migrate(),"db":str(db.path)},indent=2))
     elif args.command=="health":
-        names=[args.provider] if args.provider else [r["name"] for r in db.connect().execute("SELECT name FROM providers ORDER BY name").fetchall()]
+        if args.provider:
+            names=[args.provider]
+        else:
+            with db.connect() as conn:
+                names=[r["name"] for r in conn.execute("SELECT name FROM providers ORDER BY name").fetchall()]
         print(json.dumps([{ "provider":n, "score":round((h:=db.health(n)).score,2), "attempts":h.attempts, "success_rate":round(h.success_rate*100,2), "avg_latency_ms":h.avg_latency_ms, "status":"COOLDOWN" if h.cooldown_until>time.time() else ("DEGRADED" if h.attempts and h.success_rate<.7 else "ACTIVE") } for n in names],indent=2))
     elif args.command=="route": print(json.dumps([{"provider":c.provider,"score":round(c.score,2),"model_verified":c.model_verified,"health_score":round(c.health_score,2),"avg_latency_ms":c.avg_latency_ms} for c in db.route_candidates(args.model,verified_only=args.verified_only,capabilities=args.capability)],indent=2))
     elif args.command=="status":
@@ -290,4 +339,6 @@ def main() -> None:
             counts={key:int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for key,table in {"providers":"providers","models":"models","provider_models":"provider_models","capabilities":"capabilities","probes":"probe_runs","route_decisions":"route_decisions"}.items()}
         print(json.dumps({"db":str(db.path),"schema_version":SCHEMA_VERSION,**counts},indent=2))
 
-if __name__=="__main__": main()
+
+if __name__=="__main__":
+    main()
