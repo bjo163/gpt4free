@@ -94,19 +94,49 @@ class RocksoulExecutionTests(unittest.TestCase):
         self.assertIn("B", routed)
         self.assertNotIn("A", routed)
 
-    def test_stream_failure_after_partial_output_is_terminal_and_traced(self) -> None:
+    def test_stream_failure_after_partial_output_is_terminal_and_single_counted(self) -> None:
         def stream():
             yield "chunk-1"
             raise RuntimeError("network stream broke")
 
+        before = self.db.health("A")
         engine = ExecutionEngine(self.db, FakeClient({"A": [stream()]}))
         result = engine.execute(ExecutionRequest(model="demo", messages="hello", stream=True, max_attempts=3))
         self.assertTrue(result.ok)
+        self.assertEqual(result.outcome, "streaming")
+        self.assertEqual(result.attempts[0].status, "streaming")
+        self.assertEqual(engine.trace.trace(result.request_id)["status"], "streaming")
         with self.assertRaisesRegex(RuntimeError, "stream broke"):
             list(result.response)
         trace = engine.trace.trace(result.request_id)
         self.assertEqual(trace["status"], "stream_failed_after_partial")
         self.assertEqual(trace["attempts"][0]["status"], "stream_failed_after_partial")
+        after = self.db.health("A")
+        self.assertEqual(after.attempts, before.attempts + 1)
+        self.assertEqual(after.failures, before.failures + 1)
+        self.assertEqual(after.successes, before.successes)
+
+    def test_successful_stream_records_success_only_after_consumption(self) -> None:
+        def stream():
+            yield "chunk-1"
+            yield "chunk-2"
+
+        before = self.db.health("A")
+        engine = ExecutionEngine(self.db, FakeClient({"A": [stream()]}))
+        result = engine.execute(ExecutionRequest(model="demo", messages="hello", stream=True))
+        self.assertTrue(result.ok)
+        self.assertEqual(result.outcome, "streaming")
+        self.assertEqual(engine.trace.trace(result.request_id)["status"], "streaming")
+        during = self.db.health("A")
+        self.assertEqual(during.attempts, before.attempts)
+        self.assertEqual(list(result.response), ["chunk-1", "chunk-2"])
+        trace = engine.trace.trace(result.request_id)
+        self.assertEqual(trace["status"], "success")
+        self.assertEqual(trace["attempts"][0]["status"], "success")
+        after = self.db.health("A")
+        self.assertEqual(after.attempts, before.attempts + 1)
+        self.assertEqual(after.successes, before.successes + 1)
+        self.assertEqual(after.failures, before.failures)
 
     def test_policy_taxonomy(self) -> None:
         cases = [("timed out", ErrorClass.TIMEOUT, RetryAction.NEXT_PROVIDER), ("network down", ErrorClass.NETWORK, RetryAction.NEXT_PROVIDER), ("429 rate limit exceeded", ErrorClass.RATE_LIMIT, RetryAction.COOLDOWN_NEXT_PROVIDER), ("401 unauthorized", ErrorClass.AUTH, RetryAction.NEXT_PROVIDER), ("model not found", ErrorClass.MODEL_NOT_FOUND, RetryAction.RECOMPUTE_CANDIDATES), ("unsupported operation", ErrorClass.UNSUPPORTED, RetryAction.RECOMPUTE_CANDIDATES), ("content blocked by safety policy", ErrorClass.CONTENT_BLOCKED, RetryAction.TERMINAL), ("temporary fault", ErrorClass.UNKNOWN, RetryAction.BOUNDED_RETRY)]
