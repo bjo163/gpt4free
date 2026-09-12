@@ -60,6 +60,28 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Validate release notes match package version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          version = os.environ['VERSION']
+          notes = Path('RELEASE_NOTES.md').read_text(encoding='utf-8').splitlines()
+          heading = next((line.strip() for line in notes if line.strip()), '')
+          expected = f'v{version}'
+
+          if expected not in heading:
+              raise SystemExit(
+                  f"RELEASE_NOTES.md is not ready for package {version}: "
+                  f"first non-empty line must identify {expected!r}; got {heading!r}. "
+                  "Update package version and release notes before publishing."
+              )
+          PY
+
       - name: Check release state
         id: release_state
         env:
@@ -100,6 +122,14 @@ jobs:
             --title "ROCKSOUL $TAG" \
             --notes-file RELEASE_NOTES.md
 
-      - name: Release already exists
+      - name: Reconcile existing GitHub release metadata
         if: steps.release_state.outputs.exists == 'true'
-        run: echo "Release ${{ steps.version.outputs.tag }} already exists; no duplicate release created."
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          gh release edit "$TAG" \
+            --title "ROCKSOUL $TAG" \
+            --notes-file RELEASE_NOTES.md
+          echo "Release $TAG already existed; title and notes were synchronized to repository truth."
