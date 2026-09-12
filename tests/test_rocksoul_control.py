@@ -35,9 +35,16 @@ class RocksoulControlTests(unittest.TestCase):
         self.assertEqual(self.control.get("A").state, "QUARANTINED")
         self.assertEqual(RecoveryManager(self.db).quarantined(), ["A"])
         self.control.begin_recovery("A")
-        self.assertEqual(self.control.get("A").state, "PROBING")
+        probing = self.control.get("A")
+        self.assertEqual(probing.state, "PROBING")
+        self.assertTrue(probing.blocked)
+        candidates = ExplainableRouter(self.db).explain("demo")
+        self.assertEqual([item["provider"] for item in candidates], ["B"])
         self.control.re_admit("A")
-        self.assertEqual(self.control.get("A").state, "RE_ADMITTED")
+        readmitted = self.control.get("A")
+        self.assertEqual(readmitted.state, "RE_ADMITTED")
+        self.assertFalse(readmitted.blocked)
+        self.assertIn("A", [item["provider"] for item in ExplainableRouter(self.db).explain("demo")])
         self.assertIn("QUARANTINED", {event["to_state"] for event in self.control.history("A")})
 
     def test_expired_cooldown_re_admits_active(self) -> None:
