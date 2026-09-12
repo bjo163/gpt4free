@@ -2,7 +2,7 @@
 
 ## Rule
 
-A ROCKSOUL release is product-ready only when all mandatory gates below are green on CI and covered by deterministic tests. Open P0/P1 execution-control items block release. F4 Mesh and F5 Arena are separate future phases and are not release blockers for the F1–F3 baseline.
+A ROCKSOUL release is product-ready only when all mandatory gates below are green on the final candidate and covered by deterministic tests. Documentation cannot override a red implementation or CI gate. F5 Arena remains a separate future phase and is not a blocker for the v0.2.0 F0–F4 baseline.
 
 ## F0 — Guardrails
 - [x] Unique request identity.
@@ -37,6 +37,34 @@ A ROCKSOUL release is product-ready only when all mandatory gates below are gree
 - [x] Canonical route explanation shared by routing and execution.
 - [x] Streaming failure safety contract.
 
+## F4 — Mesh
+
+### Security
+- [x] Remote node self-service messages use HMAC-SHA256 authentication.
+- [x] Timestamp skew is bounded and replayed `(node_id, nonce)` values are rejected.
+- [x] Production supports distinct per-node secrets.
+- [x] Mesh secrets are not persisted in node/lease/event tables or emitted by the operator CLI.
+- [x] HTTPS is required by default; plaintext HTTP requires explicit local/private development policy.
+- [x] Embedded URL credentials/fragments are rejected.
+
+### Lifecycle and coordination
+- [x] Canonical states exist: `REGISTERED`, `ACTIVE`, `DEGRADED`, `DRAINING`, `QUARANTINED`, `OFFLINE`.
+- [x] Authenticated heartbeat activates normal nodes without overriding draining/quarantine isolation.
+- [x] Heartbeat TTL removes stale nodes from normal routing.
+- [x] Only active nodes satisfying all requested capabilities are eligible.
+- [x] Per-node in-flight capacity is controlled by leases, not heartbeat claims.
+- [x] Request IDs are idempotent for lease acquisition.
+- [x] Lease TTL is bounded and expiry returns capacity.
+- [x] Ranking has deterministic stable node-ID tie breaking.
+
+### Failure isolation and observability
+- [x] Failed leases affect only the owning node.
+- [x] Node lifecycle is independent from F3 provider lifecycle.
+- [x] No eligible node fails closed instead of bypassing state/capability policy.
+- [x] Current node state, lease history, replay evidence, and lifecycle events are persisted.
+- [x] `rocksoul-mesh` exposes JSON status/list/register/heartbeat/state/select/lease/release/events operations.
+- [x] Legacy `rocksoul_platform.MeshRegistry` remains compatibility-only and is not the canonical coordinator.
+
 ## F6 — CLI
 - [x] status
 - [x] discover
@@ -53,13 +81,17 @@ A ROCKSOUL release is product-ready only when all mandatory gates below are gree
 - [x] `route --verified-only` remains enforced when capability filters are present.
 
 ## F7 — Certification
-- [x] Offline contract tests for product CLI commands in the certified baseline.
+- [x] Offline contract tests for execution-control product commands.
 - [x] Failure taxonomy regression suite.
 - [x] Retry/quarantine/recovery regression suite.
 - [x] Stream lifecycle/evidence regression suite.
 - [x] Whole-request in-flight timeout regression suite.
 - [x] Verified-only capability-routing regression suite.
-- [x] Windows + Linux ROCKSOUL CI required on the final release candidate.
+- [x] Deterministic Mesh security/lifecycle/routing/lease/failure-isolation tests.
+- [x] Deterministic `rocksoul-mesh` CLI contract tests.
+- [x] Dedicated Mesh CI requires Ubuntu + Windows / Python 3.13 plus package build.
+- [x] Existing ROCKSOUL CI remains required on Ubuntu + Windows / Python 3.13.
+- [x] General repository Unittest remains a final compatibility gate.
 
 ## F8 — Productization
 - [x] ROCKSOUL-first README.
@@ -67,12 +99,12 @@ A ROCKSOUL release is product-ready only when all mandatory gates below are gree
 - [x] Granular backlog.
 - [x] Standalone migration plan.
 - [x] Contribution/compatibility boundary synchronized.
+- [x] F4 Mesh architecture and independent release gate documented.
 
 ## Future
 
-- F4 Mesh: `DEFERRED` to its own implementation/release gate. Foundation dependency is satisfied; Mesh is not enabled by this baseline.
-- F5 Arena: `DEFERRED` to its own implementation/release gate. Foundation dependency is satisfied; Arena is not enabled by this baseline.
+- F5 Arena: `DEFERRED` to its own benchmark/reproducibility/provenance/anti-gaming release gate. Its foundation dependency is satisfied, but Arena is not enabled by v0.2.0.
 
-## Evidence policy
+## Final-head evidence policy
 
-A checked box must map to source code, a deterministic test, or a verified repository/CI configuration. Documentation alone cannot close an implementation gate.
+A checked implementation/configuration box must map to source code, a deterministic test, or a verified repository configuration. The v0.2.0 candidate may merge only if the exact final head is green on dedicated ROCKSOUL Mesh CI, existing ROCKSOUL CI, and general Unittest. The production release workflow then reruns deterministic regression tests and package build before publishing the version tag and artifacts.
