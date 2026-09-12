@@ -20,7 +20,13 @@ class ProviderControl:
 
     @property
     def blocked(self) -> bool:
-        return self.state == "QUARANTINED" or (
+        """Return whether normal request routing must exclude this provider.
+
+        Recovery probes are operator-controlled traffic. A provider in PROBING
+        must therefore stay isolated from normal execution until the recovery
+        manager explicitly transitions it to RE_ADMITTED.
+        """
+        return self.state in {"QUARANTINED", "PROBING"} or (
             self.state == "DEGRADED" and self.state_until > time.time()
         )
 
