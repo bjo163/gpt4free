@@ -4,7 +4,7 @@
 
 ## Product identity
 
-ROCKSOUL is the product/control-plane layer built on top of the existing g4f runtime. The runtime remains the provider execution substrate. ROCKSOUL owns routing intelligence, execution policy, health evidence, traceability, recovery, future mesh coordination, and product-facing interfaces. ROCKSOUL does not duplicate provider implementations.
+ROCKSOUL is the product/control-plane layer built on top of the existing g4f runtime. The runtime remains the provider execution substrate. ROCKSOUL owns routing intelligence, execution policy, health evidence, traceability, recovery, Mesh coordination, and product-facing interfaces. ROCKSOUL does not duplicate provider implementations.
 
 ## Status legend
 
@@ -81,6 +81,64 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 - Acceptance: one stream attempt contributes at most one terminal execution health signal; failed streams are not counted as both success and failure.
 - Tests: `test_stream_failure_after_partial_output_is_terminal_and_single_counted`, `test_successful_stream_records_success_only_after_consumption`.
 
+## F4 Mesh coordination
+
+### RS-F4-001 — Persistent Mesh coordination foundation
+- Status: `DONE`
+- Scope: production Mesh state is stored in the existing ROCKSOUL SQLite control-plane database without replacing F1–F3 execution/provider state.
+- Implementation: `g4f/rocksoul_mesh.py` tables `mesh_nodes`, `mesh_leases`, `mesh_events`, and `mesh_auth_nonces`.
+- Acceptance: node state, lease history, audit events, and replay evidence survive process boundaries and remain separate from provider lifecycle tables.
+- Tests: deterministic Mesh core suite.
+
+### RS-F4-002 — Authenticated node identity and replay protection
+- Status: `DONE`
+- Scope: remote node self-service operations use HMAC-SHA256 with action, node ID, timestamp, nonce, and canonical payload.
+- Acceptance: invalid signatures, wrong per-node keys, stale timestamps, and replayed `(node_id, nonce)` values are rejected; secrets are not persisted in audit rows.
+- Tests: `test_authenticated_registration_rejects_invalid_signature_and_replay`, `test_per_node_keys_isolate_node_identity`.
+
+### RS-F4-003 — Secure endpoint boundary
+- Status: `DONE`
+- Scope: production endpoints require HTTPS; plaintext HTTP is allowed only by explicit local/private development policy.
+- Acceptance: malformed endpoints, embedded credentials/fragments, and non-local plaintext endpoints fail closed.
+- Tests: `test_endpoint_security_requires_https_unless_local_policy_is_explicit`.
+
+### RS-F4-004 — Explicit node lifecycle and stale-node isolation
+- Status: `DONE`
+- Scope: `REGISTERED`, `ACTIVE`, `DEGRADED`, `DRAINING`, `QUARANTINED`, `OFFLINE`.
+- Acceptance: authenticated heartbeat activates normal nodes, heartbeat expiry marks stale nodes offline, and heartbeat cannot silently make draining/quarantined nodes routable.
+- Tests: heartbeat/offline lifecycle and state-routing assertions in `tests/test_rocksoul_mesh.py`.
+
+### RS-F4-005 — Deterministic capability/capacity routing
+- Status: `DONE`
+- Scope: only active nodes satisfying every requested capability and remaining under authoritative capacity are eligible.
+- Acceptance: ranking is deterministic from health, weight, latency, load, failure penalty, and stable node-ID tie breaking; no eligible node returns no selection rather than bypassing policy.
+- Tests: `test_selection_respects_capabilities_score_capacity_and_idempotency`.
+
+### RS-F4-006 — Bounded idempotent work leases
+- Status: `DONE`
+- Scope: request IDs map idempotently to bounded leases and reserve control-plane-owned in-flight capacity.
+- Acceptance: lease TTL is finite, expiry returns capacity, and node heartbeat claims cannot overwrite authoritative in-flight counts.
+- Tests: lease selection, idempotency, capacity, expiry, and release coverage in the Mesh core/CLI suites.
+
+### RS-F4-007 — Per-node failure isolation
+- Status: `DONE`
+- Scope: failures degrade/quarantine only the owning node while preserving unrelated nodes and the independent F3 provider lifecycle.
+- Acceptance: failed leases cannot fan out quarantine state to other nodes/providers; draining/quarantined/offline/degraded nodes remain excluded from normal Mesh work.
+- Tests: `test_failure_isolation_quarantines_only_failing_node`, draining/lease-expiry assertions.
+
+### RS-F4-008 — Mesh observability and operator CLI
+- Status: `DONE`
+- Scope: auditable node/lease events plus JSON-oriented `rocksoul-mesh` operator surface.
+- Commands: `status`, `list`, `register`, `heartbeat`, `state`, `select`, `lease`, `release`, `events`.
+- Acceptance: operator state and audit evidence are inspectable without exposing configured secrets; missing key material fails clearly.
+- Tests: `tests/test_rocksoul_mesh_cli.py` plus Mesh status/event assertions.
+
+### RS-F4-009 — Independent Mesh release gate
+- Status: `DONE subject to final-candidate CI`
+- Scope: dedicated F4 CI/release contract independent of legacy Mesh/Arena scaffolding.
+- Acceptance: Mesh CI must pass Ubuntu/Windows Python 3.13 deterministic core+CLI tests and package build; final `main` candidate must also pass existing ROCKSOUL CI and general Unittest.
+- Workflow: `.github/workflows/rocksoul-mesh-ci.yml`.
+
 ## F6 product CLI
 
 ### RS-F6-001 — CLI contract suite
@@ -102,6 +160,11 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 - Coverage: fallback ordering, taxonomy, bounded retries, cooldown, quarantine, recovery state machine, trace reconstruction, stream safety/evidence, lifecycle budget, CLI contracts, verified-only capability routing.
 - Release requirement: required Ubuntu and Windows ROCKSOUL CI must be green on the final release candidate.
 
+### RS-F7-002 — Mesh release matrix
+- Status: `DONE subject to final-candidate CI`
+- Coverage: Mesh auth/replay, node identity, endpoint security, lifecycle, capability/capacity routing, lease idempotency/expiry, failure isolation, audit events, and operator CLI.
+- Release requirement: dedicated Mesh CI plus existing ROCKSOUL CI and general Unittest must be green on the final release candidate.
+
 ## F8 documentation and productization
 
 ### RS-F8-001 — Product README
@@ -113,25 +176,26 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 ### RS-F8-003 — Contributing and compatibility boundary
 - Status: `DONE`
 
-## F4/F5 future gates
+### RS-F8-004 — F4 Mesh architecture and release gate
+- Status: `DONE`
+- Docs: `docs/rocksoul-mesh.md`, `docs/rocksoul-mesh-release-gate.md`.
 
-### RS-F4-001 — Mesh foundation
-- Status: `DEFERRED`
-- Foundation dependency: F1-F3 + F6 + F7 certification satisfied.
-- Rule: Mesh remains disabled until its own implementation, security, observability, failure-boundary, and verification gate is completed.
+## F5 future gate
 
 ### RS-F5-001 — Arena benchmark plane
 - Status: `DEFERRED`
-- Foundation dependency: stable execution traces, health feedback, and release certification satisfied.
-- Rule: Arena remains outside the certified baseline until its own deterministic benchmark/release contract is implemented.
+- Foundation dependency: stable execution traces, provider health, Mesh coordination, and release certification satisfied.
+- Rule: Arena remains outside the certified product until its own deterministic benchmark methodology, provenance, anti-gaming, and release contract is implemented.
 
-## Definition of Product-Ready Baseline
+## Definition of Product-Ready v0.2 Baseline
 
 - F1 execution works through existing runtime provider implementations.
 - F2 persists every attempt and final outcome.
 - F3 has deterministic taxonomy, bounded retries, explicit cooldown, quarantine, probing isolation, recovery, safe streaming semantics, single-counted stream evidence, and whole-request time budgeting including in-flight calls.
-- F6 CLI is documented and contract-tested, including verified-only capability filtering.
-- F7 tests are offline by default and CI-certified on required platforms.
+- F4 has authenticated node identity, replay protection, explicit lifecycle, deterministic capability/capacity routing, bounded leases, failure isolation, auditable events, and a separate operator CLI.
+- F6 execution CLI and F4 Mesh CLI are documented and contract-tested.
+- F7 tests are offline by default and CI-certified on required platforms before merge.
 - F8 docs use ROCKSOUL product terminology consistently.
 - No duplicate provider implementation exists.
-- F4/F5 are not enabled merely because legacy/future scaffolding exists.
+- Legacy `MeshRegistry` remains compatibility-only; it is not the canonical F4 path.
+- F5 Arena is not enabled merely because legacy/future scaffolding exists.

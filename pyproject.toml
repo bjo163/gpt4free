@@ -1,6 +1,6 @@
 [project]
 name = "gpt4free"
-version = "0.1.0"
+version = "0.2.0"
 description = "ROCKSOUL multi-provider AI execution control plane built on a g4f-compatible runtime"
 readme = "README.md"
 authors = [
@@ -39,6 +39,7 @@ dependencies = [
 gpt4free = "g4f.cli:main"
 rocksoul = "g4f.rocksoul_db_cli:main"
 rocksoul-db = "g4f.rocksoul_db:main"
+rocksoul-mesh = "g4f.rocksoul_mesh_cli:main"
 rocksoul-legacy = "g4f.rocksoul_platform:main"
 
 [tool.uv.build-backend]
