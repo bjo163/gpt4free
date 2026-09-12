@@ -99,8 +99,8 @@ class ExplainableRouter:
             if candidate.avg_latency_ms is not None: reasons.append(f"average latency {candidate.avg_latency_ms:.1f}ms")
             output.append({"provider":candidate.provider,"accepted":accepted,"score":round(candidate.score,2),"model_verified":candidate.model_verified,"health_score":round(candidate.health_score,2),"avg_latency_ms":candidate.avg_latency_ms,"capabilities":states,"control_state":control.state,"control_reason":control.reason,"reasons":reasons})
         return output
-    def select(self, model: str, requirements: Sequence[CapabilityRequirement] = (), providers: Sequence[str] | None = None) -> dict[str, Any] | None:
-        explained=self.explain(model,requirements,providers); accepted=[x for x in explained if x["accepted"]]; selected=max(accepted,key=lambda x:x["score"]) if accepted else None
+    def select(self, model: str, requirements: Sequence[CapabilityRequirement] = (), providers: Sequence[str] | None = None, verified_only: bool = False) -> dict[str, Any] | None:
+        explained=self.explain(model,requirements,providers,verified_only); accepted=[x for x in explained if x["accepted"]]; selected=max(accepted,key=lambda x:x["score"]) if accepted else None
         self.db.record_route(model,[RouteCandidate(x["provider"],x["score"],x["model_verified"],x["health_score"],x["avg_latency_ms"]) for x in explained],selected["provider"] if selected else None,selected["reasons"] if selected else ["no candidate satisfied requirements"])
         return selected
 

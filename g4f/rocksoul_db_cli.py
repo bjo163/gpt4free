@@ -92,7 +92,7 @@ def main() -> None:
     elif args.command == "route":
         requirements = _requirements(args)
         if requirements:
-            print(json.dumps(ExplainableRouter(db).select(args.model, requirements) or {"selected": None, "reason": "no candidate satisfied capability requirements"}, indent=2))
+            print(json.dumps(ExplainableRouter(db).select(args.model, requirements, verified_only=args.verified_only) or {"selected": None, "reason": "no candidate satisfied capability requirements"}, indent=2))
         else:
             explained = ExplainableRouter(db).explain(args.model, (), None, args.verified_only)
             print(json.dumps(explained, indent=2))
