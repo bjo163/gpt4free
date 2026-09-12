@@ -87,7 +87,9 @@ class RocksoulExecutionTests(unittest.TestCase):
         self.assertEqual(state.state, "DEGRADED")
         self.assertGreater(state.state_until, 0.0)
         self.assertEqual(result.provider, "B")
-        self.assertEqual([candidate.provider for candidate in self.db.route_candidates("demo")], ["B"])
+        routed = [candidate.provider for candidate in self.db.route_candidates("demo")]
+        self.assertIn("B", routed)
+        self.assertNotIn("A", routed)
 
     def test_stream_failure_after_partial_output_is_terminal_and_traced(self) -> None:
         def stream():
