@@ -131,12 +131,11 @@ class RocksoulExecutionTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(len(result.attempts), 0)
         self.assertEqual(client.chat.completions.calls, [])
-        self.assertEqual(result.outcome, "exhausted")
-        self.assertEqual(result.error_class, "exhausted")
+        self.assertEqual(result.outcome, "budget_exhausted")
+        self.assertEqual(result.error_class, "budget_exhausted")
 
     def test_request_identity_is_unique(self) -> None:
         self.assertNotEqual(ExecutionRequest(model="demo", messages=[]).request_id, ExecutionRequest(model="demo", messages=[]).request_id)
 
 
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == "__main__": unittest.main()
