@@ -2,38 +2,50 @@
 
 ## Release scope
 
-This certification covers the F1-F3 execution control plane and the F6 product CLI. F4 Mesh and F5 Arena are deliberately out of scope until a later release.
+This certification covers the F0–F3 execution control plane, F6 product CLI, F7 deterministic verification matrix, and F8 product documentation. F4 Mesh and F5 Arena are deliberately outside this baseline and require their own implementation/release gates before they may be enabled as product features.
 
 ## Certified gates
 
-- **F0 guardrails:** request identity, existing runtime boundary, no provider duplication.
-- **F1 execution:** normalized request, deterministic candidate ordering, bounded provider fallback through the existing client.
-- **F2 trace:** execution run and every provider attempt are persisted; real execution becomes health evidence.
-- **F3 reliability:** deterministic error taxonomy, bounded total attempts, per-provider attempt budget, explicit rate-limit cooldown, explicit quarantine, recovery probing, re-admission, and safe streaming failure behavior.
-- **F6 CLI:** product commands expose JSON-oriented, automation-friendly control-plane operations.
-- **F7 tests:** offline tests cover the control state machine, fallback, retry limits, cooldown, trace persistence, stream safety, and CLI contracts.
-- **F8 productization:** ROCKSOUL is the product identity; g4f remains the compatibility/runtime substrate with truthful attribution.
+- **F0 guardrails:** unique request identity, explicit compatibility boundary, hermetic default tests, and no provider implementation duplication.
+- **F1 execution:** normalized request, deterministic candidate ordering, bounded provider fallback through the existing client, per-attempt timeout, and whole-request budget enforcement including in-flight calls.
+- **F2 trace:** execution runs and provider attempts are persisted; terminal execution outcomes become health evidence; streaming evidence is not double-counted.
+- **F3 reliability:** deterministic error taxonomy, bounded global and per-provider attempts, explicit rate-limit cooldown, quarantine, recovery probing, probing isolation, re-admission, canonical route explanation, and safe streaming lifecycle behavior.
+- **F6 CLI:** JSON-oriented product commands expose automation-friendly control-plane operations and preserve `--verified-only` when capability filters are used.
+- **F7 tests:** offline tests cover routing, control lifecycle, fallback, retry limits, cooldown, trace persistence, stream lifecycle/evidence, total-time budgeting, and CLI contracts on the required Ubuntu/Windows CI matrix.
+- **F8 productization:** ROCKSOUL is the product/control-plane identity; g4f remains the compatibility/runtime substrate with truthful attribution and an explicit standalone migration plan.
+
+## Audit hardening included in this candidate
+
+The final F1–F3 audit added regression-proven fixes for:
+
+1. clipping an in-flight provider timeout to the remaining whole-request budget;
+2. excluding `PROBING` providers from normal routing until explicit re-admission;
+3. recording exactly one terminal health outcome for each streaming execution attempt;
+4. preserving model `--verified-only` filtering when capability requirements are present;
+5. making the total-budget regression test deterministic across Ubuntu and Windows.
 
 ## Non-goals
 
-A successful F1-F3 certification does not claim that every provider works, that provider credentials are available, or that network availability is guaranteed. Live-provider operations remain runtime-dependent.
+This certification does not claim that every upstream provider works, that credentials/cookies are always available, that external networks are reliable, or that a timed-out third-party provider thread can be forcibly terminated by Python after control returns. It certifies ROCKSOUL's routing, bounded waiting, lifecycle, trace, and evidence contracts around the existing runtime substrate.
 
 ## Release rule
 
-Do not enable Mesh or Arena merely because their future interfaces exist. They require a separate gate with their own tests, security model, observability, and failure boundaries.
+Do not enable Mesh or Arena merely because legacy/future interfaces or scaffolding exist. Each requires a separate gate with its own tests, security model, observability, failure boundaries, and release evidence.
 
 ## Certification checklist
 
 ```text
-[ ] F0 guardrails proven
+[x] F0 guardrails proven
 [x] F1 execution contracts and fallback
 [x] F2 persistence and trace reconstruction
-[x] F3 retry/cooldown/quarantine/recovery controls
+[x] F3 retry/cooldown/quarantine/probing/recovery controls
 [x] F6 CLI contract
-[x] F7 offline regression suite
-[x] F8 product docs and identity
-[ ] F4 Mesh
-[ ] F5 Arena
+[x] F7 offline regression suite + required platform CI gate
+[x] F8 product docs and compatibility boundary
+[ ] F4 Mesh — deferred to separate gate
+[ ] F5 Arena — deferred to separate gate
 ```
 
-The unchecked F0 marker is intentional until the final release review verifies all guardrails together on the candidate commit.
+## Final evidence rule
+
+The code and deterministic tests define the candidate. A merge to `main` is allowed only after the latest candidate commit is green on the required ROCKSOUL CI matrix and the general unit-test workflow. Documentation must never be used to override a red code/CI gate.
