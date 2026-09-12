@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -21,6 +22,8 @@ class FakeCompletions:
         value = values.pop(0) if values else {"provider": provider, "content": "ok"}
         if isinstance(value, BaseException):
             raise value
+        if callable(value):
+            return value()
         return value
 
 
@@ -135,6 +138,31 @@ class RocksoulExecutionTests(unittest.TestCase):
         self.assertEqual(client.chat.completions.calls, [])
         self.assertEqual(result.outcome, "budget_exhausted")
         self.assertEqual(result.error_class, "budget_exhausted")
+
+    def test_total_time_budget_caps_inflight_provider_timeout(self) -> None:
+        def slow_response():
+            time.sleep(0.20)
+            return {"content": "late"}
+
+        client = FakeClient({"A": [slow_response]})
+        started = time.monotonic()
+        result = ExecutionEngine(self.db, client).execute(
+            ExecutionRequest(
+                model="demo",
+                messages="hello",
+                max_attempts=1,
+                max_total_time=0.05,
+                timeout=1.0,
+            )
+        )
+        elapsed = time.monotonic() - started
+        self.assertFalse(result.ok)
+        self.assertEqual(result.outcome, "budget_exhausted")
+        self.assertEqual(result.error_class, "budget_exhausted")
+        self.assertEqual(len(result.attempts), 1)
+        self.assertEqual(result.attempts[0].error_class, "timeout")
+        self.assertIn("timed out after", result.attempts[0].error or "")
+        self.assertLess(elapsed, 0.18)
 
     def test_request_identity_is_unique(self) -> None:
         self.assertNotEqual(ExecutionRequest(model="demo", messages=[]).request_id, ExecutionRequest(model="demo", messages=[]).request_id)
