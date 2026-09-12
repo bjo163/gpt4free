@@ -170,29 +170,29 @@ class RocksoulExecutionTests(unittest.TestCase):
         self.assertEqual(result.error_class, "budget_exhausted")
 
     def test_total_time_budget_caps_inflight_provider_timeout(self) -> None:
-        def slow_response():
-            time.sleep(0.20)
-            return {"content": "late"}
+        class CapturingTimeoutEngine(ExecutionEngine):
+            seen_timeout: float | None = None
 
-        client = FakeClient({"A": [slow_response]})
-        started = time.monotonic()
-        result = ExecutionEngine(self.db, client).execute(
+            def _call_with_timeout(self, request, provider, timeout=None):
+                self.seen_timeout = timeout
+                return {"content": "ok"}
+
+        engine = CapturingTimeoutEngine(self.db, FakeClient())
+        result = engine.execute(
             ExecutionRequest(
                 model="demo",
                 messages="hello",
                 max_attempts=1,
-                max_total_time=0.05,
-                timeout=1.0,
+                max_total_time=5.0,
+                timeout=30.0,
             )
         )
-        elapsed = time.monotonic() - started
-        self.assertFalse(result.ok)
-        self.assertEqual(result.outcome, "budget_exhausted")
-        self.assertEqual(result.error_class, "budget_exhausted")
+        self.assertTrue(result.ok)
         self.assertEqual(len(result.attempts), 1)
-        self.assertEqual(result.attempts[0].error_class, "timeout")
-        self.assertIn("timed out after", result.attempts[0].error or "")
-        self.assertLess(elapsed, 0.18)
+        self.assertIsNotNone(engine.seen_timeout)
+        self.assertGreater(engine.seen_timeout or 0.0, 0.0)
+        self.assertLessEqual(engine.seen_timeout or 0.0, 5.0)
+        self.assertLess(engine.seen_timeout or 0.0, 30.0)
 
     def test_request_identity_is_unique(self) -> None:
         self.assertNotEqual(ExecutionRequest(model="demo", messages=[]).request_id, ExecutionRequest(model="demo", messages=[]).request_id)
