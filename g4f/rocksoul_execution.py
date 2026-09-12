@@ -74,16 +74,24 @@ class ExecutionEngine:
             **request.kwargs,
         )
 
-    def _call_with_timeout(self, request: ExecutionRequest, provider: str) -> Any:
-        if request.timeout <= 0:
+    def _call_with_timeout(self, request: ExecutionRequest, provider: str, timeout: float | None = None) -> Any:
+        """Execute one provider call under the effective per-attempt deadline.
+
+        ``timeout`` may be smaller than ``request.timeout`` when the remaining
+        whole-request budget is smaller. This prevents an individual provider
+        attempt from overrunning ``max_total_time`` merely because it started
+        while a small amount of total budget remained.
+        """
+        call_timeout = request.timeout if timeout is None else timeout
+        if call_timeout <= 0:
             return self._call(request, provider)
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rocksoul-exec")
         future = executor.submit(self._call, request, provider)
         try:
-            return future.result(timeout=request.timeout)
+            return future.result(timeout=call_timeout)
         except FutureTimeout as exc:
             future.cancel()
-            raise TimeoutError(f"provider {provider} timed out after {request.timeout}s") from exc
+            raise TimeoutError(f"provider {provider} timed out after {call_timeout}s") from exc
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
@@ -168,7 +176,8 @@ class ExecutionEngine:
         index = 0
         current_provider: str | None = None
         while len(attempts) < budget.max_attempts:
-            if time.monotonic() - started_total >= budget.max_total_time:
+            elapsed = time.monotonic() - started_total
+            if elapsed >= budget.max_total_time:
                 break
             if current_provider is not None:
                 provider = current_provider
@@ -182,11 +191,15 @@ class ExecutionEngine:
             provider_attempts[provider] = provider_attempts.get(provider, 0) + 1
             if not budget.allows(len(attempts), time.monotonic() - started_total, provider_attempts[provider] - 1):
                 break
+            remaining_total = budget.max_total_time - (time.monotonic() - started_total)
+            if remaining_total <= 0:
+                break
+            effective_timeout = remaining_total if request.timeout <= 0 else min(request.timeout, remaining_total)
             started = time.time()
             monotonic_started = time.monotonic()
             attempt_no = len(attempts) + 1
             try:
-                response = self._call_with_timeout(request, provider)
+                response = self._call_with_timeout(request, provider, effective_timeout)
                 finished = time.time()
                 latency_ms = (time.monotonic() - monotonic_started) * 1000.0
                 if not self._response_valid(response):
