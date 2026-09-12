@@ -1,0 +1,66 @@
+name: ROCKSOUL Arena CI
+
+on:
+  pull_request:
+    paths:
+      - 'g4f/rocksoul_arena.py'
+      - 'g4f/rocksoul_arena_cli.py'
+      - 'tests/test_rocksoul_arena*.py'
+      - 'docs/rocksoul-arena*.md'
+      - 'docs/rocksoul-todo.md'
+      - 'docs/rocksoul-product-backlog.md'
+      - 'README.md'
+      - 'pyproject.toml'
+      - '.github/workflows/rocksoul-arena-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'g4f/rocksoul_arena.py'
+      - 'g4f/rocksoul_arena_cli.py'
+      - 'tests/test_rocksoul_arena*.py'
+      - 'docs/rocksoul-arena*.md'
+      - 'docs/rocksoul-todo.md'
+      - 'docs/rocksoul-product-backlog.md'
+      - 'README.md'
+      - 'pyproject.toml'
+      - '.github/workflows/rocksoul-arena-ci.yml'
+
+jobs:
+  arena-tests:
+    name: ${{ matrix.os }} / Python 3.13
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync
+      - name: Compile Arena modules
+        run: uv run python -m compileall -q g4f/rocksoul_arena.py g4f/rocksoul_arena_cli.py
+      - name: Run deterministic Arena tests
+        run: uv run python -m unittest discover -s tests -p "test_rocksoul_arena*.py" -v
+      - name: Smoke Arena CLI
+        run: uv run rocksoul-arena --db .arena-ci.db fixture --target perfect
+
+  package:
+    name: Build package
+    needs: arena-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - name: Sync dependencies
+        run: uv sync
+      - name: Build wheel and source distribution
+        run: uv build
