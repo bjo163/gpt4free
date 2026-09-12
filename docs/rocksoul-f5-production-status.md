@@ -13,10 +13,10 @@ This file tracks the production-benchmark transition without overstating live-pr
 
 ## Verification status
 
-The contract implementation is `VERIFYING` until the exact PR head passes Arena CI on Ubuntu/Windows plus repository regression gates.
+The structural production-evidence contract is `CERTIFIED` for merge. PR #20 candidate `c778e811cdf44c3400262e4736555df386e6b869` passed `ROCKSOUL Arena CI`, `ROCKSOUL CI`, and general `Unittest`.
+
+This certification covers the evidence contract, persistence model, deterministic tests, cross-platform Arena CI, and regression compatibility. It does not certify a specific live benchmark pack.
 
 ## Live activation status
 
-Live production benchmark packs remain `DEFERRED` until a real dataset and real provider/model campaign satisfy every live activation item in `docs/rocksoul-arena-release-gate.md`.
-
-This distinction is intentional: structural evidence support may be production-grade before any specific benchmark dataset or leaderboard claim is certified.
+Live production benchmark packs remain `DEFERRED` until a real dataset and real campaign satisfy every live activation item in `docs/rocksoul-arena-release-gate.md`.
