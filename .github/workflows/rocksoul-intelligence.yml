@@ -11,7 +11,8 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Live provider probes are network-bound and may fan out across many providers.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,4 +28,4 @@ jobs:
       - name: Run bounded live probes
         env:
           ROCKSOUL_LIVE_PROBE: '1'
-        run: uv run rocksoul probe-all --model gpt-4o-mini --type smoke --concurrency 4 --timeout 20
+        run: uv run rocksoul probe-all --model gpt-4o-mini --type smoke --concurrency 8 --timeout 20
