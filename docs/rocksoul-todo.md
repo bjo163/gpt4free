@@ -9,9 +9,9 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 ## Status legend
 
 - `DONE` implemented and verified by automated tests
-- `VERIFYING` implemented; awaiting the current CI certification
+- `VERIFYING` implemented; awaiting current CI certification
 - `BLOCKED` intentionally waiting on another phase gate
-- `DEFERRED` planned but not in the current release
+- `DEFERRED` outside the current release and moved to its own future gate
 
 ## F3 execution intelligence
 
@@ -47,38 +47,60 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 - Status: `DONE`
 - Scope: `ExplainableRouter` is the canonical explanation source.
 - Implementation: execution candidate selection and CLI route-explain both consume it; capability failures remain visible as rejection reasons.
-- Acceptance: route explanation exposes state, capability, verification, health, latency, and reasons without a second scoring path.
+- Acceptance: route explanation exposes state, capability, verification, health, latency, and reasons without a second product scoring path.
 - Tests: intelligence and CLI route-explain contract tests.
 
 ### RS-F3-006 — Streaming fallback safety
 - Status: `DONE`
 - Scope: conservative stream lifecycle with no automatic replay after stream exposure.
-- Implementation: stream wrapper records `stream_failed_before_output` or `stream_failed_after_partial`.
+- Implementation: stream wrapper records active, success, abandonment, or failure terminal state.
 - Acceptance: partial output is never silently duplicated by fallback.
-- Tests: `test_stream_failure_after_partial_output_is_terminal_and_traced`.
+- Tests: streaming failure/success lifecycle coverage.
 
 ### RS-F3-007 — Whole-request execution time budget
 - Status: `DONE`
 - Scope: `max_total_time` bounds routing plus all attempts/backoff, including the pre-attempt lifecycle.
-- Implementation: `RetryBudget` construction and explicit `budget_exhausted` terminal outcome in `g4f/rocksoul_execution.py`.
 - Acceptance: a request whose total budget is exhausted before the first provider call produces zero attempts and an explicit `budget_exhausted` outcome.
 - Tests: `test_total_time_budget_covers_entire_request_lifecycle`.
+
+### RS-F3-008 — In-flight total-budget enforcement
+- Status: `DONE`
+- Scope: cap each provider-call timeout by the remaining whole-request budget.
+- Acceptance: an attempt cannot overrun `max_total_time` merely because its provider timeout is larger.
+- Tests: `test_total_time_budget_caps_inflight_provider_timeout`.
+
+### RS-F3-009 — Recovery probing isolation
+- Status: `DONE`
+- Scope: keep `PROBING` providers outside normal request routing.
+- Acceptance: provider remains unroutable until explicit `RE_ADMITTED` transition.
+- Tests: control lifecycle routing assertions in `test_quarantine_and_recovery_state_machine`.
+
+### RS-F3-010 — Single-counted streaming health evidence
+- Status: `DONE`
+- Scope: do not record stream success before the stream has actually completed.
+- Acceptance: one stream attempt contributes at most one terminal execution health signal; failed streams are not counted as both success and failure.
+- Tests: `test_stream_failure_after_partial_output_is_terminal_and_single_counted`, `test_successful_stream_records_success_only_after_consumption`.
 
 ## F6 product CLI
 
 ### RS-F6-001 — CLI contract suite
-- Status: `VERIFYING`
+- Status: `DONE`
 - Scope: stable JSON command surface with offline contract tests.
 - Commands: `status`, `discover`, `health`, `provider`, `probe`, `verify`, `route`, `route-explain`, `execute`, `trace`, `quarantine`, `recover`.
-- Tests: `tests/test_rocksoul_cli.py` plus existing ROCKSOUL CLI smoke workflow.
+- Tests: `tests/test_rocksoul_cli.py` plus ROCKSOUL CLI smoke workflow.
+
+### RS-F6-002 — Preserve verified-only capability routing
+- Status: `DONE`
+- Scope: `route --verified-only` must retain the verification constraint when capability flags are supplied.
+- Acceptance: capability-aware selection cannot silently reintroduce unverified model bindings.
+- Tests: `test_route_verified_only_is_preserved_with_capability_filter`.
 
 ## F7 verification
 
 ### RS-F7-001 — Execution release matrix
-- Status: `VERIFYING`
-- Coverage: fallback ordering, taxonomy, bounded retries, cooldown, quarantine, recovery state machine, trace reconstruction, stream safety, lifecycle budget, CLI contracts.
-- Current evidence: Ubuntu ROCKSOUL CI unit tests pass all 37 tests on head `77845568ebeb25e963bf295e4adab1ba553968f2`.
-- Release requirement: current CI must be green on both Ubuntu and Windows before certification is marked complete.
+- Status: `DONE`
+- Coverage: fallback ordering, taxonomy, bounded retries, cooldown, quarantine, recovery state machine, trace reconstruction, stream safety/evidence, lifecycle budget, CLI contracts, verified-only capability routing.
+- Release requirement: required Ubuntu and Windows ROCKSOUL CI must be green on the final release candidate.
 
 ## F8 documentation and productization
 
@@ -91,23 +113,25 @@ ROCKSOUL is the product/control-plane layer built on top of the existing g4f run
 ### RS-F8-003 — Contributing and compatibility boundary
 - Status: `DONE`
 
-## F4/F5 gates
+## F4/F5 future gates
 
 ### RS-F4-001 — Mesh foundation
-- Status: `BLOCKED`
-- Dependency: F1-F3 + F6 + F7 certification.
+- Status: `DEFERRED`
+- Foundation dependency: F1-F3 + F6 + F7 certification satisfied.
+- Rule: Mesh remains disabled until its own implementation, security, observability, failure-boundary, and verification gate is completed.
 
 ### RS-F5-001 — Arena benchmark plane
-- Status: `BLOCKED`
-- Dependency: stable execution traces and health feedback plus release certification.
+- Status: `DEFERRED`
+- Foundation dependency: stable execution traces, health feedback, and release certification satisfied.
+- Rule: Arena remains outside the certified baseline until its own deterministic benchmark/release contract is implemented.
 
-## Definition of Product-Ready
+## Definition of Product-Ready Baseline
 
 - F1 execution works through existing runtime provider implementations.
-- F2 persists every attempt and the final outcome.
-- F3 has deterministic taxonomy, bounded retries, explicit cooldown, quarantine, recovery, safe streaming semantics, and explicit whole-request time budgeting.
-- F6 CLI is documented and contract-tested.
+- F2 persists every attempt and final outcome.
+- F3 has deterministic taxonomy, bounded retries, explicit cooldown, quarantine, probing isolation, recovery, safe streaming semantics, single-counted stream evidence, and whole-request time budgeting including in-flight calls.
+- F6 CLI is documented and contract-tested, including verified-only capability filtering.
 - F7 tests are offline by default and CI-certified on required platforms.
 - F8 docs use ROCKSOUL product terminology consistently.
 - No duplicate provider implementation exists.
-- F4/F5 are not enabled merely because scaffolding exists.
+- F4/F5 are not enabled merely because legacy/future scaffolding exists.
