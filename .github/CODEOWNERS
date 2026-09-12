@@ -1,0 +1,14 @@
+# ROCKSOUL repository ownership
+#
+# This file establishes the default code-owner identity. Enforcement still
+# depends on the repository ruleset / branch-protection policy configured in
+# GitHub repository settings.
+
+* @bjo163
+
+# Release and CI policy are especially sensitive because they can publish
+# production artifacts or change certification gates.
+/.github/workflows/ @bjo163
+/pyproject.toml @bjo163
+/RELEASE_NOTES.md @bjo163
+/docs/rocksoul-*-release-gate.md @bjo163
