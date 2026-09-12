@@ -223,6 +223,12 @@ class RocksoulDB:
         with self.connect() as conn:
             conn.execute("INSERT INTO health_snapshots(provider_id,attempts,successes,failures,avg_latency_ms,p95_latency_ms,score,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)", (pid,current.attempts,current.successes,current.failures,current.avg_latency_ms,current.p95_latency_ms,current.score,status,time.time()))
             conn.execute("UPDATE providers SET status=?,updated_at=? WHERE id=?", (status,time.time(),pid))
+        if current.consecutive_failures >= 3:
+            from .rocksoul_control import ProviderControlStore
+            control = ProviderControlStore(self)
+            state = control.get(provider)
+            if state.state not in {"QUARANTINED", "PROBING"}:
+                control.quarantine(provider, f"failure_streak:{current.consecutive_failures}")
 
     def route_candidates(self, model: str, providers: Sequence[str] | None = None, verified_only: bool = False, capabilities: Sequence[str] | None = None) -> list[RouteCandidate]:
         model_id = self.upsert_model(model)
@@ -233,9 +239,16 @@ class RocksoulDB:
         if verified_only: sql += " AND pm.verified=1"
         with self.connect() as conn: rows = conn.execute(sql, params).fetchall()
         result=[]
+        from .rocksoul_control import ProviderControlStore
+        control = ProviderControlStore(self)
+        now = time.time()
         for row in rows:
-            name=row["name"]; health=self.health(name)
-            if health.cooldown_until > time.time(): continue
+            name=row["name"]
+            lifecycle = control.get(name)
+            if lifecycle.blocked:
+                continue
+            health=self.health(name)
+            if health.cooldown_until > now: continue
             if capabilities:
                 with self.connect() as conn:
                     for cap in capabilities:
